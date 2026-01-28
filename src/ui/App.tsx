@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { PermissionResult } from "./types";
+import type { CanUseToolResponse } from "./types";
 import { useIPC } from "./hooks/useIPC";
 import { useMessageWindow } from "./hooks/useMessageWindow";
 import { useAppStore } from "./store/useAppStore";
@@ -223,7 +223,7 @@ function App() {
     sendEvent({ type: "session.delete", payload: { sessionId } });
   }, [sendEvent]);
 
-  const handlePermissionResult = useCallback((toolUseId: string, result: PermissionResult) => {
+  const handlePermissionResult = useCallback((toolUseId: string, result: CanUseToolResponse) => {
     if (!activeSessionId) return;
     sendEvent({ type: "permission.response", payload: { sessionId: activeSessionId, toolUseId, result } });
     resolvePermissionRequest(activeSessionId, toolUseId);

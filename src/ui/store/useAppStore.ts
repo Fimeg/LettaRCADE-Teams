@@ -263,7 +263,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         set((state) => {
           console.log("[DEBUG] existing messages:", state.sessions[sessionId]?.messages?.length ?? 0);
           const existing = state.sessions[sessionId] ?? createSession(sessionId);
-          const newMessages = [...existing.messages, { type: "user_prompt", prompt }];
+          const newMessages = [...existing.messages, { type: "user_prompt" as const, prompt }];
           console.log("[DEBUG] new messages count:", newMessages.length, "first:", newMessages[0]);
           return {
             sessions: {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type {
-  PermissionResult,
+  CanUseToolResponse,
   SDKMessage,
   SDKToolCallMessage,
   SDKToolResultMessage,
@@ -156,7 +156,7 @@ const ToolCallCard = ({
   message: SDKToolCallMessage; 
   showIndicator?: boolean;
   permissionRequest?: PermissionRequest;
-  onPermissionResult?: (toolUseId: string, result: PermissionResult) => void;
+  onPermissionResult?: (toolUseId: string, result: CanUseToolResponse) => void;
 }) => {
   const toolStatus = useToolStatus(message.toolCallId);
   const statusVariant = toolStatus === "error" ? "error" : "success";
@@ -271,7 +271,7 @@ export function MessageCard({
   isLast?: boolean;
   isRunning?: boolean;
   permissionRequest?: PermissionRequest;
-  onPermissionResult?: (toolUseId: string, result: PermissionResult) => void;
+  onPermissionResult?: (toolUseId: string, result: CanUseToolResponse) => void;
 }) {
   const showIndicator = isLast && isRunning;
 
