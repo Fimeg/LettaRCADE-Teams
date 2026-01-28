@@ -3,13 +3,13 @@
  * No persistence needed - Letta handles conversation/message storage.
  */
 
-import type { PermissionResult } from "../types.js";
+import type { CanUseToolResponse } from "../types.js";
 
 export type PendingPermission = {
   toolUseId: string;
   toolName: string;
   input: unknown;
-  resolve: (result: PermissionResult) => void;
+  resolve: (result: CanUseToolResponse) => void;
 };
 
 export type SessionStatus = "idle" | "running" | "completed" | "error";

@@ -11,21 +11,16 @@ export type {
   SDKToolResultMessage,
   SDKReasoningMessage,
   SDKResultMessage,
+  CanUseToolResponse,
 } from "@letta-ai/letta-code-sdk";
-
-// Permission result - Letta format
-export interface PermissionResult {
-  allow: boolean;
-  reason?: string;
-}
 
 export type UserPromptMessage = {
   type: "user_prompt";
   prompt: string;
 };
 
-// Import for union type
-import type { SDKMessage } from "@letta-ai/letta-code-sdk";
+// Import for union type and local use
+import type { SDKMessage, CanUseToolResponse } from "@letta-ai/letta-code-sdk";
 
 export type StreamMessage = SDKMessage | UserPromptMessage;
 
@@ -60,4 +55,4 @@ export type ClientEvent =
   | { type: "session.delete"; payload: { sessionId: string } }
   | { type: "session.list" }
   | { type: "session.history"; payload: { sessionId: string } }
-  | { type: "permission.response"; payload: { sessionId: string; toolUseId: string; result: PermissionResult } };
+  | { type: "permission.response"; payload: { sessionId: string; toolUseId: string; result: CanUseToolResponse } };

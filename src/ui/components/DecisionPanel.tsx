@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { PermissionResult } from "../types";
+import type { CanUseToolResponse } from "../types";
 import type { PermissionRequest } from "../store/useAppStore";
 
 type AskUserQuestionInput = {
@@ -17,7 +17,7 @@ export function DecisionPanel({
   onSubmit
 }: {
   request: PermissionRequest;
-  onSubmit: (result: PermissionResult) => void;
+  onSubmit: (result: CanUseToolResponse) => void;
 }) {
   const input = request.input as AskUserQuestionInput | null;
   const questions = input?.questions ?? [];
@@ -48,6 +48,28 @@ export function DecisionPanel({
     return selected.length > 0 || otherText.length > 0;
   });
 
+  // Build answers object from selections
+  const buildAnswers = (): Record<string, string> => {
+    const answers: Record<string, string> = {};
+    questions.forEach((q, qIndex) => {
+      const selected = selectedOptions[qIndex] ?? [];
+      const otherText = otherInputs[qIndex]?.trim() ?? "";
+      // Prefer other text if provided, otherwise use selected options
+      if (otherText) {
+        answers[q.question] = otherText;
+      } else if (selected.length > 0) {
+        answers[q.question] = selected.join(", ");
+      }
+    });
+    return answers;
+  };
+
+  // Build updatedInput with answers injected
+  const buildUpdatedInput = (): Record<string, unknown> => ({
+    ...input,
+    answers: buildAnswers(),
+  });
+
   if (request.toolName === "AskUserQuestion" && questions.length > 0) {
     return (
       <div className="rounded-2xl border border-accent/20 bg-accent-subtle p-5">
@@ -73,7 +95,12 @@ export function DecisionPanel({
                     }`}
                     onClick={() => {
                       if (shouldAutoSubmit) {
-                        onSubmit({ allow: true });
+                        // Single question, single select - submit immediately with this answer
+                        const updatedInput = {
+                          ...input,
+                          answers: { [q.question]: option.label },
+                        };
+                        onSubmit({ behavior: "allow", updatedInput });
                         return;
                       }
                       toggleOption(qIndex, option.label, q.multiSelect);
@@ -105,7 +132,7 @@ export function DecisionPanel({
             }`}
             onClick={() => {
               if (!canSubmit) return;
-              onSubmit({ allow: true });
+              onSubmit({ behavior: "allow", updatedInput: buildUpdatedInput() });
             }}
             disabled={!canSubmit}
           >
@@ -113,7 +140,7 @@ export function DecisionPanel({
           </button>
           <button
             className="rounded-full border border-ink-900/10 bg-surface px-5 py-2 text-sm font-medium text-ink-700 hover:bg-surface-tertiary transition-colors"
-            onClick={() => onSubmit({ allow: false, reason: "User canceled the question" })}
+            onClick={() => onSubmit({ behavior: "deny", message: "User canceled the question" })}
           >
             Cancel
           </button>
@@ -136,13 +163,13 @@ export function DecisionPanel({
       <div className="mt-4 flex flex-wrap gap-3">
         <button
           className="rounded-full bg-accent px-5 py-2 text-sm font-medium text-white shadow-soft hover:bg-accent-hover transition-colors"
-          onClick={() => onSubmit({ allow: true })}
+          onClick={() => onSubmit({ behavior: "allow" })}
         >
           Allow
         </button>
         <button
           className="rounded-full border border-ink-900/10 bg-surface px-5 py-2 text-sm font-medium text-ink-700 hover:bg-surface-tertiary transition-colors"
-          onClick={() => onSubmit({ allow: false, reason: "User denied the request" })}
+          onClick={() => onSubmit({ behavior: "deny", message: "User denied the request" })}
         >
           Deny
         </button>

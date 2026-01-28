@@ -4,7 +4,7 @@ import {
   resumeConversation,
   type Session as LettaSession,
   type SDKMessage,
-  type PermissionResult,
+  type CanUseToolResponse,
 } from "@letta-ai/letta-code-sdk";
 import type { ServerEvent } from "../types.js";
 import type { PendingPermission } from "./runtime-state.js";
@@ -67,7 +67,7 @@ export async function runLetta(options: RunnerOptions): Promise<RunnerHandle> {
         if (toolName === "AskUserQuestion") {
           const toolUseId = crypto.randomUUID();
           sendPermissionRequest(toolUseId, toolName, input);
-          return new Promise<PermissionResult>((resolve) => {
+          return new Promise<CanUseToolResponse>((resolve) => {
             session.pendingPermissions.set(toolUseId, {
               toolUseId,
               toolName,
@@ -79,7 +79,7 @@ export async function runLetta(options: RunnerOptions): Promise<RunnerHandle> {
             });
           });
         }
-        return { allow: true };
+        return { behavior: "allow" as const };
       };
 
       // Create session (sync - init happens on first send)
