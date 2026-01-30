@@ -1,6 +1,7 @@
 import { BrowserWindow } from "electron";
 import type { ClientEvent, ServerEvent } from "./types.js";
 import { runLetta, type RunnerHandle } from "./libs/runner.js";
+import type { PendingPermission } from "./libs/runtime-state.js";
 import {
   createRuntimeSession,
   getSession,
@@ -48,11 +49,11 @@ export async function handleClientEvent(event: ClientEvent) {
   }
 
   if (event.type === "session.start") {
-    const pendingPermissions = new Map<string, any>();
+    const pendingPermissions = new Map<string, PendingPermission>();
 
     try {
       let conversationId: string | null = null;
-      let handle: any = null;
+      let handle: RunnerHandle | null = null;
       
       handle = await runLetta({
         prompt: event.payload.prompt,
@@ -66,7 +67,8 @@ export async function handleClientEvent(event: ClientEvent) {
         onEvent: (e) => {
           // Use conversationId for all events
           if (conversationId && "sessionId" in e.payload) {
-            (e.payload as any).sessionId = conversationId;
+            const payload = e.payload as { sessionId: string };
+            payload.sessionId = conversationId;
           }
           emit(e);
         },
@@ -129,6 +131,7 @@ export async function handleClientEvent(event: ClientEvent) {
           id: conversationId,
           title: conversationId,
           status: "running",
+          cwd: event.payload.cwd,
           pendingPermissions: runtimeSession.pendingPermissions,
         },
         resumeConversationId: conversationId,
