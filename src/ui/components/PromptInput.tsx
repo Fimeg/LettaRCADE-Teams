@@ -41,7 +41,7 @@ export function usePromptActions(sendEvent: (event: ClientEvent) => void) {
         setGlobalError("Session is still running. Please wait for it to finish.");
         return;
       }
-      sendEvent({ type: "session.continue", payload: { sessionId: activeSessionId, prompt } });
+      sendEvent({ type: "session.continue", payload: { sessionId: activeSessionId, prompt, cwd: activeSession?.cwd  } });
       setPrompt("");
     }
   }, [activeSession, activeSessionId, cwd, prompt, sendEvent, setGlobalError, setPendingStart, setPrompt]);
