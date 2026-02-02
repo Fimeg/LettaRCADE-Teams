@@ -1,41 +1,31 @@
 import { app, BrowserWindow, ipcMain, dialog, globalShortcut, Menu } from "electron"
 import { execSync } from "child_process";
+import { config as dotenvConfig } from "dotenv";
+import { join } from "path";
 import { ipcMainHandle, isDev, DEV_PORT } from "./util.js";
 
-// Find letta CLI and load shell env before anything else
+// Load .env file from project root
+dotenvConfig({ path: join(process.cwd(), ".env") });
+
+// Default to Letta Cloud if no base URL set
+if (!process.env.LETTA_BASE_URL) {
+  process.env.LETTA_BASE_URL = "https://api.letta.com";
+}
+
+// Set dummy API key for localhost (local server doesn't check it)
+if (!process.env.LETTA_API_KEY && process.env.LETTA_BASE_URL?.includes("localhost")) {
+  process.env.LETTA_API_KEY = "local-dev-key";
+}
+
+// Find letta CLI
 try {
-  // Get env from shell (to get LETTA_API_KEY etc)
-  const shellEnv = execSync("bash -l -c 'env'", { encoding: "utf-8" });
-  for (const line of shellEnv.split("\n")) {
-    const [key, ...valueParts] = line.split("=");
-    if (key && valueParts.length > 0) {
-      const value = valueParts.join("=");
-      if (key.startsWith("LETTA_") || key === "ANTHROPIC_API_KEY") {
-        process.env[key] = value;
-        console.log(`Loaded env: ${key}=${value.substring(0, 10)}...`);
-      }
-    }
-  }
-  
-  // Default to Letta Cloud if no base URL set
-  if (!process.env.LETTA_BASE_URL) {
-    process.env.LETTA_BASE_URL = "https://api.letta.com";
-    console.log("Set LETTA_BASE_URL to Letta Cloud (api.letta.com)");
-  }
-  
-  // Set dummy API key for localhost (local server doesn't check it)
-  if (!process.env.LETTA_API_KEY && process.env.LETTA_BASE_URL?.includes("localhost")) {
-    process.env.LETTA_API_KEY = "local-dev-key";
-    console.log("Set dummy LETTA_API_KEY for localhost");
-  }
-  
   const lettaPath = execSync("which letta", { encoding: "utf-8" }).trim();
   if (lettaPath) {
     process.env.LETTA_CLI_PATH = lettaPath;
     console.log("Found letta CLI at:", lettaPath);
   }
 } catch (e) {
-  console.warn("Could not load shell env:", e);
+  console.warn("Could not find letta CLI:", e);
 }
 import { getPreloadPath, getUIPath, getIconPath } from "./pathResolver.js";
 import { getStaticData, pollResources, stopPolling } from "./test.js";
@@ -118,7 +108,7 @@ app.on("ready", () => {
     });
 
     // Handle client events
-    ipcMain.on("client-event", (_: any, event: ClientEvent) => {
+    ipcMain.on("client-event", (_: Electron.IpcMainEvent, event: ClientEvent) => {
         handleClientEvent(event);
     });
 
