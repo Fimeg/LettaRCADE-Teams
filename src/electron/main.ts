@@ -129,17 +129,4 @@ app.on("ready", () => {
 
         return result.filePaths[0];
     });
-
-    // API config handlers (simplified - use env vars)
-    ipcMainHandle("get-api-config", () => {
-        return null; // Letta uses its own config
-    });
-
-    ipcMainHandle("check-api-config", () => {
-        return { hasConfig: true, config: null }; // Letta handles auth
-    });
-
-    ipcMainHandle("save-api-config", () => {
-        return { success: true }; // No-op, Letta handles config
-    });
 })
