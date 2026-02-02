@@ -91,7 +91,6 @@ function App() {
   const activeSession = activeSessionId ? sessions[activeSessionId] : undefined;
   const messages = activeSession?.messages ?? [];
   const permissionRequests = activeSession?.permissionRequests ?? [];
-  console.log("[DEBUG] App render - activeSessionId:", activeSessionId, "messages:", messages.length, messages.map(m => m.type));
   const isRunning = activeSession?.status === "running";
 
   const {

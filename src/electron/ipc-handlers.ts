@@ -74,7 +74,6 @@ export async function handleClientEvent(event: ClientEvent) {
         },
         onSessionUpdate: (updates) => {
           // Called when session is initialized with conversationId
-          console.log("[DEBUG] onSessionUpdate called:", updates);
           if (updates.lettaConversationId && !conversationId) {
             conversationId = updates.lettaConversationId;
             
@@ -87,7 +86,6 @@ export async function handleClientEvent(event: ClientEvent) {
               type: "session.status",
               payload: { sessionId: conversationId, status: "running", title: conversationId, cwd: event.payload.cwd },
             });
-            console.log("[DEBUG] Emitting stream.user_prompt:", { sessionId: conversationId, prompt: event.payload.prompt });
             emit({
               type: "stream.user_prompt",
               payload: { sessionId: conversationId, prompt: event.payload.prompt },
