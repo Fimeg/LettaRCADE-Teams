@@ -6,7 +6,6 @@ import { useAppStore } from "./store/useAppStore";
 import type { ServerEvent } from "./types";
 import { Sidebar } from "./components/Sidebar";
 import { StartSessionModal } from "./components/StartSessionModal";
-import { SettingsModal } from "./components/SettingsModal";
 import { PromptInput, usePromptActions } from "./components/PromptInput";
 import { MessageCard } from "./components/EventCard";
 import MDContent from "./render/markdown";
@@ -30,8 +29,6 @@ function App() {
   const activeSessionId = useAppStore((s) => s.activeSessionId);
   const showStartModal = useAppStore((s) => s.showStartModal);
   const setShowStartModal = useAppStore((s) => s.setShowStartModal);
-  const showSettingsModal = useAppStore((s) => s.showSettingsModal);
-  const setShowSettingsModal = useAppStore((s) => s.setShowSettingsModal);
   const globalError = useAppStore((s) => s.globalError);
   const setGlobalError = useAppStore((s) => s.setGlobalError);
   const historyRequested = useAppStore((s) => s.historyRequested);
@@ -43,8 +40,6 @@ function App() {
   const cwd = useAppStore((s) => s.cwd);
   const setCwd = useAppStore((s) => s.setCwd);
   const pendingStart = useAppStore((s) => s.pendingStart);
-  const apiConfigChecked = useAppStore((s) => s.apiConfigChecked);
-  const setApiConfigChecked = useAppStore((s) => s.setApiConfigChecked);
 
   // Handle partial messages from stream events
   const handlePartialMessages = useCallback((partialEvent: ServerEvent) => {
@@ -103,20 +98,6 @@ function App() {
   } = useMessageWindow(messages, permissionRequests, activeSessionId);
 
   // 启动时检查 API 配置
-  useEffect(() => {
-    if (!apiConfigChecked) {
-      window.electron.checkApiConfig().then((result) => {
-        setApiConfigChecked(true);
-        if (!result.hasConfig) {
-          setShowSettingsModal(true);
-        }
-      }).catch((err) => {
-        console.error("Failed to check API config:", err);
-        setApiConfigChecked(true);
-      });
-    }
-  }, [apiConfigChecked, setApiConfigChecked, setShowSettingsModal]);
-
   useEffect(() => {
     if (connected) sendEvent({ type: "session.list" });
   }, [connected, sendEvent]);
@@ -345,10 +326,6 @@ function App() {
           onStart={handleStartFromModal}
           onClose={() => setShowStartModal(false)}
         />
-      )}
-
-      {showSettingsModal && (
-        <SettingsModal onClose={() => setShowSettingsModal(false)} />
       )}
 
       {globalError && (
