@@ -52,8 +52,8 @@ Agents remember across conversations (via memory blocks), but each conversation 
 ### Prerequisites
 
 - [Bun](https://bun.sh/) or Node.js 22+
-- [Letta Code](https://github.com/letta-ai/letta-code) CLI installed
-- A running Letta server (local or cloud)
+- Letta API key from [app.letta.com/settings](https://app.letta.com/settings)
+- [letta-code-sdk](https://github.com/letta-ai/letta-code-sdk) cloned locally at `../letta-code-sdk` (temporary - will be published to npm)
 
 ### Environment Setup
 
@@ -94,7 +94,7 @@ Letta Cowork uses [`@letta-ai/letta-code-sdk`](https://www.npmjs.com/package/@le
 
 1. The app spawns the Letta Code CLI as a subprocess via the SDK
 2. Communication happens via stdin/stdout JSON streaming
-3. Each task creates a new conversation (`newConversation: true`)
+3. Each task creates a new conversation on the LRU agent (via `createSession()`)
 4. Agent memory persists across conversations via memory blocks
 
 ## Development
