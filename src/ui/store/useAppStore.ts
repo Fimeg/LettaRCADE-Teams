@@ -219,22 +219,23 @@ export const useAppStore = create<AppState>((set, get) => ({
           const messages = [...existing.messages];
           
           // Get message ID (uuid for SDK messages)
-          const msgId = (message as any).uuid || (message as any).id;
-          const msgType = (message as any).type;
+          const msgId = 'uuid' in message ? message.uuid : undefined;
+          const msgType = message.type;
           
           if (msgId) {
             // Find existing message with same ID
             const existingIdx = messages.findIndex(
-              (m) => (m as any).uuid === msgId || (m as any).id === msgId
+              (m) => 'uuid' in m && m.uuid === msgId
             );
             if (existingIdx >= 0) {
               // For streaming messages, ACCUMULATE content (SDK sends deltas)
               if (msgType === "reasoning" || msgType === "assistant") {
-                const existingMsg = messages[existingIdx] as any;
-                const newContent = (message as any).content || "";
+                const existingMsg = messages[existingIdx];
+                const existingContent = 'content' in existingMsg ? existingMsg.content : "";
+                const newContent = 'content' in message ? message.content : "";
                 messages[existingIdx] = {
                   ...message,
-                  content: (existingMsg.content || "") + newContent
+                  content: existingContent + newContent
                 } as StreamMessage;
               } else {
                 // Other messages: replace
@@ -259,12 +260,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       case "stream.user_prompt": {
         const { sessionId, prompt } = event.payload;
-        console.log("[DEBUG] stream.user_prompt:", { sessionId, prompt });
         set((state) => {
-          console.log("[DEBUG] existing messages:", state.sessions[sessionId]?.messages?.length ?? 0);
           const existing = state.sessions[sessionId] ?? createSession(sessionId);
           const newMessages = [...existing.messages, { type: "user_prompt" as const, prompt }];
-          console.log("[DEBUG] new messages count:", newMessages.length, "first:", newMessages[0]);
           return {
             sessions: {
               ...state.sessions,
