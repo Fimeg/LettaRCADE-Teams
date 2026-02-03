@@ -99,8 +99,13 @@ export async function runLetta(options: RunnerOptions): Promise<RunnerHandle> {
         // Create new conversation on existing agent
         lettaSession = createSession(cachedAgentId, sessionOptions);
       } else {
-        // First time - create agent, then create conversation
-        cachedAgentId = await createAgent();
+        // First time - create agent optimized for task management
+        cachedAgentId = await createAgent({
+          systemPrompt: 'default',  // Full Letta Code prompt with skills/memory
+          memory: ['persona', 'project'],
+          persona: 'You are a helpful task assistant. Help users complete tasks efficiently and thoroughly. Be proactive and detail-oriented.',
+          project: 'Multi-task environment managed via Letta Cowork - a desktop app for managing concurrent work'
+        });
         lettaSession = createSession(cachedAgentId, sessionOptions);
       }
 
