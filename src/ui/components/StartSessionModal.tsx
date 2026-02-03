@@ -69,7 +69,7 @@ export function StartSessionModal({
                     <button
                       key={path}
                       type="button"
-                      className={`truncate rounded-full border px-3 py-1.5 text-xs transition-colors whitespace-nowrap ${cwd === path ? "border-accent/60 bg-accent/10 text-ink-800" : "border-ink-900/10 bg-white text-muted hover:border-ink-900/20 hover:text-ink-700"}`}
+                      className={`truncate rounded-full border px-3 py-1.5 text-xs transition-colors whitespace-nowrap ${cwd === path ? "border-accent/60 bg-accent/10 text-ink-800" : "border-ink-900/10 bg-surface text-muted hover:border-ink-900/20 hover:text-ink-700"}`}
                       onClick={() => onCwdChange(path)}
                       title={path}
                     >
