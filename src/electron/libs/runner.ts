@@ -1,5 +1,4 @@
 import {
-  createAgent,
   createSession,
   resumeSession,
   type Session as LettaSession,
@@ -97,30 +96,10 @@ export async function runLetta(options: RunnerOptions): Promise<RunnerHandle> {
         lettaSession = resumeSession(resumeConversationId, sessionOptions);
       } else if (cachedAgentId) {
         // Create new conversation on existing agent
-        lettaSession = createSession(cachedAgentId, sessionOptions);
+        lettaSession = resumeSession(cachedAgentId, sessionOptions);
       } else {
-        // First time - create agent optimized for task management
-        cachedAgentId = await createAgent({
-          systemPrompt: `You are Letta Cowork, a task-focused AI assistant running inside a desktop app that helps developers manage multiple concurrent tasks.
-
-            Your role is to help users complete coding tasks efficiently and thoroughly. You have access to the full Letta Code toolset including:
-            - File operations (Read, Write, Edit, Glob, Grep)
-            - Command execution (Bash)
-            - Web research (web_search, fetch_webpage)
-            - Memory management and conversation search
-
-            Key behaviors:
-            - Be proactive: Suggest next steps and anticipate needs
-            - Be thorough: Complete tasks fully before moving on
-            - Be organized: Break complex tasks into clear steps
-            - Be context-aware: Users are managing multiple tasks simultaneously in different conversations
-            - Be efficient: Provide concise responses unless detail is requested
-
-            Each conversation in Letta Cowork represents a separate task. Users may switch between tasks frequently, so always check conversation context before proceeding.`,
-          memory: ['persona'],
-          persona: 'You are a helpful task assistant. Be proactive, thorough, and detail-oriented.'
-        });
-        lettaSession = createSession(cachedAgentId, sessionOptions);
+        // First time - create new agent and session
+        lettaSession = createSession(sessionOptions);
       }
 
       // Store for abort handling
