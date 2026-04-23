@@ -2,6 +2,7 @@ import { useEffect, useMemo } from "react";
 import { useAppStore, type Agent, type MemoryBlock, type ToolAttachment } from "../store/useAppStore";
 import { MemoryBlockList } from "./MemoryBlockList";
 import { ToolAttachmentList } from "./ToolAttachmentList";
+import { useMemorySync } from "../hooks/useMemorySync";
 
 interface AgentDetailPanelProps {
   agentId?: string;
@@ -149,6 +150,9 @@ export function AgentDetailPanel({ agentId, className }: AgentDetailPanelProps) 
       setSelectedAgentId(activeSession.agentId);
     }
   }, [activeSession?.agentId, selectedAgentId, setSelectedAgentId]);
+
+  // Real-time WebSocket sync for memory blocks
+  useMemorySync(effectiveAgentId);
 
   const handleEditBlock = (block: MemoryBlock) => {
     // Placeholder for edit functionality (read-only mode for now)
