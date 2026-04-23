@@ -126,6 +126,22 @@ code, pre, textarea.mono, input.mono {
   animation: shimmer 1.4s linear infinite;
 }
 
+/* Resizable panel handle styles */
+.PanelResizeHandle {
+  width: 4px;
+  background: var(--color-border);
+  cursor: col-resize;
+  transition: background 0.15s ease;
+}
+
+.PanelResizeHandle:hover {
+  background: var(--color-accent);
+}
+
+[data-panel-resize-handle-state="dragging"] {
+  background: var(--color-accent);
+}
+
 /* Dark mode overrides using CSS custom properties */
 @media (prefers-color-scheme: dark) {
   :root {

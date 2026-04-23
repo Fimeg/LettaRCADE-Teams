@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import type { CanUseToolResponse } from "./types";
 import { useIPC } from "./hooks/useIPC";
 import { useMessageWindow } from "./hooks/useMessageWindow";
 import { useAppStore } from "./store/useAppStore";
 import type { ServerEvent } from "./types";
 import { Sidebar } from "./components/Sidebar";
+import { AgentDetailPanel } from "./components/AgentDetailPanel";
 import { StartSessionModal } from "./components/StartSessionModal";
 import { PromptInput, usePromptActions } from "./components/PromptInput";
 import { MessageCard } from "./components/EventCard";
@@ -217,13 +219,19 @@ function App() {
 
   return (
     <div className="flex h-screen bg-surface">
-      <Sidebar
-        connected={connected}
-        onNewSession={handleNewSession}
-        onDeleteSession={handleDeleteSession}
-      />
+      <PanelGroup direction="horizontal" className="flex-1">
+        <Panel defaultSize={20} minSize={15} maxSize={40}>
+          <Sidebar
+            connected={connected}
+            onNewSession={handleNewSession}
+            onDeleteSession={handleDeleteSession}
+          />
+        </Panel>
 
-      <main className="flex flex-1 flex-col ml-[280px] bg-surface-cream">
+        <PanelResizeHandle className="PanelResizeHandle" />
+
+        <Panel defaultSize={60} minSize={30}>
+          <main className="flex flex-1 flex-col h-full bg-surface-cream">
         <div
           className="flex items-center justify-center h-12 border-b border-ink-900/10 bg-surface-cream select-none"
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
@@ -306,7 +314,7 @@ function App() {
         {hasNewMessages && !shouldAutoScroll && (
           <button
             onClick={scrollToBottom}
-            className="fixed bottom-28 left-1/2 ml-[140px] z-40 -translate-x-1/2 flex items-center gap-2 rounded-full bg-accent px-4 py-2 text-sm font-medium text-white shadow-lg transition-all hover:bg-accent-hover hover:scale-105 animate-bounce-subtle"
+            className="fixed bottom-28 left-1/2 z-40 -translate-x-1/2 flex items-center gap-2 rounded-full bg-accent px-4 py-2 text-sm font-medium text-white shadow-lg transition-all hover:bg-accent-hover hover:scale-105 animate-bounce-subtle"
           >
             <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M12 5v14M5 12l7 7 7-7" />
@@ -315,6 +323,14 @@ function App() {
           </button>
         )}
       </main>
+        </Panel>
+
+        <PanelResizeHandle className="PanelResizeHandle" />
+
+        <Panel defaultSize={20} minSize={15} maxSize={50}>
+          <AgentDetailPanel />
+        </Panel>
+      </PanelGroup>
 
       {showStartModal && (
         <StartSessionModal
