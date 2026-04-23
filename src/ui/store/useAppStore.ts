@@ -113,6 +113,7 @@ interface AppState {
   setSelectedAgentId: (id: string | null) => void;
   updateAgent: (agent: Agent) => void;
   updateMemoryBlock: (agentId: string, blockId: string, newValue: string) => Promise<void>;
+  updateMemoryBlocks: (agentId: string, blocks: MemoryBlock[]) => void;
   markHistoryRequested: (sessionId: string) => void;
   resolvePermissionRequest: (sessionId: string, toolUseId: string) => void;
   handleServerEvent: (event: ServerEvent) => void;
@@ -266,6 +267,20 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     // TODO: Replace with actual API call when available
     // await api.updateMemoryBlock(agentId, blockId, newValue);
+  },
+
+  updateMemoryBlocks: (agentId, blocks) => {
+    set((state) => {
+      const agent = state.agents[agentId];
+      if (!agent) return {};
+
+      return {
+        agents: {
+          ...state.agents,
+          [agentId]: { ...agent, memoryBlocks: blocks, updatedAt: Date.now() }
+        }
+      };
+    });
   },
 
   markHistoryRequested: (sessionId) => {
