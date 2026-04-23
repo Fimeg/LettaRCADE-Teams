@@ -1,8 +1,9 @@
 /**
  * Letta SDK message types for UI communication.
+ * Re-exports SDK 0.1.14 types with UI-specific extensions.
  */
 
-// Re-export SDK types
+// Re-export all SDK message types
 export type {
   SDKMessage,
   SDKInitMessage,
@@ -12,9 +13,52 @@ export type {
   SDKReasoningMessage,
   SDKResultMessage,
   SDKStreamEventMessage,
+  SDKErrorMessage,
+  SDKRetryMessage,
+  SDKStreamEventPayload,
+  SDKStreamEventDeltaPayload,
+  SDKStreamEventMessagePayload,
+  SDKUnknownStreamEventPayload,
+  SDKErrorCode,
   CanUseToolResponse,
+  CanUseToolResponseAllow,
+  CanUseToolResponseDeny,
+  CanUseToolCallback,
+  TextContent,
+  ImageContent,
+  MessageContentItem,
+  SendMessage,
+  AgentTool,
+  AnyAgentTool,
+  AgentToolResult,
+  AgentToolResultContent,
+  AgentToolUpdateCallback,
+  CreateSessionOptions,
+  CreateAgentOptions,
+  InternalSessionOptions,
+  ListMessagesOptions,
+  ListMessagesResult,
+  BootstrapStateOptions,
+  BootstrapStateResult,
+  RunTurnOptions,
+  RecoverPendingApprovalsOptions,
+  RecoverPendingApprovalsResult,
+  ExecuteExternalToolRequest,
+  SkillSource,
+  SleeptimeTrigger,
+  SleeptimeBehavior,
+  SleeptimeOptions,
+  EffectiveSleeptimeSettings,
+  SystemPromptPreset,
+  SystemPromptPresetConfigSDK,
+  SystemPromptConfig,
+  BlockReference,
+  MemoryItem,
+  MemoryPreset,
+  PermissionMode,
 } from "@letta-ai/letta-code-sdk";
 
+// UI-specific message type (not in SDK)
 export type UserPromptMessage = {
   type: "user_prompt";
   prompt: string;
