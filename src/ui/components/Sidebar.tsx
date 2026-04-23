@@ -16,6 +16,7 @@ export function Sidebar({
   const sessions = useAppStore((state) => state.sessions);
   const activeSessionId = useAppStore((state) => state.activeSessionId);
   const setActiveSessionId = useAppStore((state) => state.setActiveSessionId);
+  const setSelectedAgentId = useAppStore((state) => state.setSelectedAgentId);
   const [resumeSessionId, setResumeSessionId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const closeTimerRef = useRef<number | null>(null);
@@ -91,8 +92,13 @@ export function Sidebar({
           <div
             key={session.id}
             className={`cursor-pointer rounded-xl border px-2 py-3 text-left transition ${activeSessionId === session.id ? "border-accent/30 bg-accent-subtle" : "border-ink-900/5 bg-surface hover:bg-surface-tertiary"}`}
-            onClick={() => setActiveSessionId(session.id)}
-            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setActiveSessionId(session.id); } }}
+            onClick={() => {
+              setActiveSessionId(session.id);
+              if (session.agentId) {
+                setSelectedAgentId(session.agentId);
+              }
+            }}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setActiveSessionId(session.id); if (session.agentId) { setSelectedAgentId(session.agentId); } } }}
             role="button"
             tabIndex={0}
           >
