@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { ChannelType, DeployConfig } from '../services/api';
-import { deployAgent, getMatrixRooms, getTelegramChats } from '../services/api';
+import { deployApi } from '../services/api';
+
+const { deployAgent, getMatrixRooms, getTelegramChats } = deployApi;
 
 interface DeployModalProps {
   agentId: string;

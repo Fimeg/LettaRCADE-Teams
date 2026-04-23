@@ -122,101 +122,33 @@ interface AppState {
 
 /**
  * Extract string content from a StreamMessage for accumulation.
- * Handles SDK 0.1.14 format where content can be:
- * - string (legacy and new simple format)
- * - Array<{type: string, text?: string, ...}> (new structured format)
- * - { text?: string, ... } (new object format)
+ * SDK 0.1.14 uses string content for most message types.
  */
 function extractMessageContent(message: StreamMessage): string {
-  if (!('content' in message) || message.content === undefined) {
-    return '';
+  // Only process message types that have content
+  if (message.type === 'assistant' || message.type === 'reasoning' || message.type === 'tool_result') {
+    return message.content || '';
   }
-
-  const content = message.content;
-
-  // Simple string content
-  if (typeof content === 'string') {
-    return content;
-  }
-
-  // Array of content blocks (SDK 0.1.14 format)
-  if (Array.isArray(content)) {
-    return content.map(block => {
-      if (typeof block === 'string') return block;
-      if (block && typeof block === 'object') {
-        // Handle structured content blocks
-        if ('text' in block) return String(block.text ?? '');
-        if ('value' in block) return String((block as { value?: unknown }).value ?? '');
-      }
-      return '';
-    }).join('');
-  }
-
-  // Object content with text field
-  if (content && typeof content === 'object') {
-    if ('text' in content) return String(content.text ?? '');
-    // Fallback for legacy value field
-    if ('value' in content) return String((content as { value?: unknown }).value ?? '');
-  }
-
   return '';
 }
 
 /**
  * Merge accumulated text into a message while preserving SDK format.
- * Returns a new message with updated content field.
+ * SDK 0.1.14 uses simple string content.
  */
-function mergeMessageContent(existingMsg: StreamMessage, newMsg: StreamMessage, accumulatedText: string): StreamMessage {
-  const existingContent = 'content' in existingMsg ? existingMsg.content : undefined;
-
-  // If content is array format, rebuild array with accumulated text in text blocks
-  if (Array.isArray(existingContent)) {
-    return {
-      ...newMsg,
-      content: existingContent.map((block, idx) => {
-        if (typeof block === 'string') {
-          // Distribute accumulated text to first string block only
-          return idx === 0 ? accumulatedText : '';
-        }
-        if (block && typeof block === 'object' && 'text' in block) {
-          return { ...block, text: accumulatedText };
-        }
-        return block;
-      })
-    } as StreamMessage;
+function mergeMessageContent(_existingMsg: StreamMessage, newMsg: StreamMessage, accumulatedText: string): StreamMessage {
+  // Only merge for message types with content field
+  if (newMsg.type === 'assistant' || newMsg.type === 'reasoning' || newMsg.type === 'tool_result') {
+    return { ...newMsg, content: accumulatedText };
   }
-
-  // If content is object with text field
-  if (existingContent && typeof existingContent === 'object' && !Array.isArray(existingContent)) {
-    return {
-      ...newMsg,
-      content: { ...existingContent, text: accumulatedText }
-    } as StreamMessage;
-  }
-
-  // Default: use simple string format
-  return { ...newMsg, content: accumulatedText } as StreamMessage;
+  return newMsg;
 }
 
 /**
- * Normalize message content to handle SDK 0.1.14 format variations.
- * Ensures backward compatibility with legacy `value` field.
+ * Normalize message content to handle SDK 0.1.14 format.
+ * No transformation needed for SDK 0.1.14 as it uses consistent string content.
  */
 function normalizeMessageContent(message: StreamMessage): StreamMessage {
-  if (!('content' in message) || message.content === undefined) {
-    return message;
-  }
-
-  const content = message.content;
-
-  // Handle legacy format with `value` instead of `content`
-  if (content && typeof content === 'object' && 'value' in content && !('text' in content)) {
-    return {
-      ...message,
-      content: { text: String((content as { value?: unknown }).value ?? '') }
-    } as StreamMessage;
-  }
-
   return message;
 }
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import { Panel, Group, Separator } from "react-resizable-panels";
 import type { CanUseToolResponse } from "./types";
 import { useIPC } from "./hooks/useIPC";
 import { useMessageWindow } from "./hooks/useMessageWindow";
@@ -219,7 +219,7 @@ function App() {
 
   return (
     <div className="flex h-screen bg-surface">
-      <PanelGroup direction="horizontal" className="flex-1">
+      <Group orientation="horizontal" className="flex-1">
         <Panel defaultSize={20} minSize={15} maxSize={40}>
           <Sidebar
             connected={connected}
@@ -228,7 +228,7 @@ function App() {
           />
         </Panel>
 
-        <PanelResizeHandle className="PanelResizeHandle" />
+        <Separator />
 
         <Panel defaultSize={60} minSize={30}>
           <main className="flex flex-1 flex-col h-full bg-surface-cream">
@@ -325,12 +325,12 @@ function App() {
       </main>
         </Panel>
 
-        <PanelResizeHandle className="PanelResizeHandle" />
+        <Separator />
 
         <Panel defaultSize={20} minSize={15} maxSize={50}>
           <AgentDetailPanel />
         </Panel>
-      </PanelGroup>
+      </Group>
 
       {showStartModal && (
         <StartSessionModal

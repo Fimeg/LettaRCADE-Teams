@@ -155,7 +155,7 @@ export function AgentDetailPanel({ agentId, className }: AgentDetailPanelProps) 
   }, [activeSession?.agentId, selectedAgentId, setSelectedAgentId]);
 
   // Real-time WebSocket sync for memory blocks
-  useMemorySync(effectiveAgentId);
+  useMemorySync(effectiveAgentId ?? null);
 
   const handleEditBlock = (block: MemoryBlock) => {
     // Placeholder for edit functionality (read-only mode for now)

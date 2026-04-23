@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import type { ChannelType, ChannelStatus, DeployedChannel } from '../services/api';
-import { getDeployStatus, undeployChannel } from '../services/api';
+import { deployApi } from '../services/api';
+
+const { getDeployStatus, undeployChannel } = deployApi;
 
 interface ChannelStatusProps {
   agentId: string;
