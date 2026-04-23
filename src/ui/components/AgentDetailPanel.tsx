@@ -1,8 +1,10 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAppStore, type Agent, type MemoryBlock, type ToolAttachment } from "../store/useAppStore";
 import { MemoryBlockList } from "./MemoryBlockList";
 import { ToolAttachmentList } from "./ToolAttachmentList";
 import { useMemorySync } from "../hooks/useMemorySync";
+import { DeployModal } from "./DeployModal";
+import { ChannelStatus } from "./ChannelStatus";
 
 interface AgentDetailPanelProps {
   agentId?: string;
@@ -121,6 +123,7 @@ function SectionHeader({
 }
 
 export function AgentDetailPanel({ agentId, className }: AgentDetailPanelProps) {
+  const [showDeployModal, setShowDeployModal] = useState(false);
   const agents = useAppStore((state) => state.agents);
   const selectedAgentId = useAppStore((state) => state.selectedAgentId);
   const setSelectedAgentId = useAppStore((state) => state.setSelectedAgentId);
@@ -218,10 +221,50 @@ export function AgentDetailPanel({ agentId, className }: AgentDetailPanelProps) 
             <p className="text-xs text-muted truncate">{agent.id.slice(0, 8)}...</p>
           </div>
         </div>
+        <button
+          onClick={() => setShowDeployModal(true)}
+          className="flex items-center gap-1.5 rounded-lg bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/20 transition-colors"
+          title="Deploy Agent"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            className="h-3.5 w-3.5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+            <line x1="12" x2="12" y1="19" y2="22" />
+          </svg>
+          Deploy
+        </button>
       </div>
 
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6">
+        {/* Channel Status Section */}
+        <section>
+          <SectionHeader
+            title="Channels"
+            icon={
+              <svg
+                viewBox="0 0 24 24"
+                className="h-4 w-4"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+              </svg>
+            }
+          />
+          <div className="rounded-xl border border-ink-900/5 bg-surface-secondary px-3 py-2">
+            <ChannelStatus agentId={agent.id} />
+          </div>
+        </section>
+
         {/* Metadata Section */}
         <section>
           <SectionHeader
@@ -366,6 +409,14 @@ export function AgentDetailPanel({ agentId, className }: AgentDetailPanelProps) 
           <span>v0.16.7</span>
         </div>
       </div>
+
+      {/* Deploy Modal */}
+      <DeployModal
+        agentId={agent.id}
+        agentName={agent.name}
+        isOpen={showDeployModal}
+        onClose={() => setShowDeployModal(false)}
+      />
     </aside>
   );
 }
