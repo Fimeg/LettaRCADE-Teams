@@ -7,6 +7,49 @@ export type PermissionRequest = {
   input: unknown;
 };
 
+/**
+ * Extract text content from SDK 0.1.14 memory block content.
+ * Handles both new format (content object with text field) and legacy format (string value).
+ *
+ * SDK 0.1.14 changed memory blocks from:
+ * - Old: { value: string }
+ * - New: { content: { text?: string, ... } | string }
+ */
+export function extractBlockText(content: unknown): string {
+  if (typeof content === 'string') {
+    return content;
+  }
+  if (content && typeof content === 'object' && 'text' in content) {
+    return String(content.text ?? '');
+  }
+  if (content && typeof content === 'object' && 'value' in content) {
+    // Legacy fallback for old format
+    return String((content as { value?: unknown }).value ?? '');
+  }
+  return '';
+}
+
+/**
+ * Normalize block content to SDK 0.1.14 format.
+ * Returns the content in the new format, handling legacy `value` field.
+ */
+export function normalizeBlockContent(block: { content?: unknown; value?: unknown }): { text?: string } | string {
+  // If content exists, use it (new format)
+  if (block.content !== undefined) {
+    if (typeof block.content === 'string') {
+      return block.content;
+    }
+    if (block.content && typeof block.content === 'object') {
+      return block.content as { text?: string };
+    }
+  }
+  // Fallback to legacy value field
+  if (block.value !== undefined) {
+    return { text: String(block.value) };
+  }
+  return { text: '' };
+}
+
 export type SessionView = {
   id: string;
   title: string;
@@ -40,6 +83,106 @@ interface AppState {
   markHistoryRequested: (sessionId: string) => void;
   resolvePermissionRequest: (sessionId: string, toolUseId: string) => void;
   handleServerEvent: (event: ServerEvent) => void;
+}
+
+/**
+ * Extract string content from a StreamMessage for accumulation.
+ * Handles SDK 0.1.14 format where content can be:
+ * - string (legacy and new simple format)
+ * - Array<{type: string, text?: string, ...}> (new structured format)
+ * - { text?: string, ... } (new object format)
+ */
+function extractMessageContent(message: StreamMessage): string {
+  if (!('content' in message) || message.content === undefined) {
+    return '';
+  }
+
+  const content = message.content;
+
+  // Simple string content
+  if (typeof content === 'string') {
+    return content;
+  }
+
+  // Array of content blocks (SDK 0.1.14 format)
+  if (Array.isArray(content)) {
+    return content.map(block => {
+      if (typeof block === 'string') return block;
+      if (block && typeof block === 'object') {
+        // Handle structured content blocks
+        if ('text' in block) return String(block.text ?? '');
+        if ('value' in block) return String((block as { value?: unknown }).value ?? '');
+      }
+      return '';
+    }).join('');
+  }
+
+  // Object content with text field
+  if (content && typeof content === 'object') {
+    if ('text' in content) return String(content.text ?? '');
+    // Fallback for legacy value field
+    if ('value' in content) return String((content as { value?: unknown }).value ?? '');
+  }
+
+  return '';
+}
+
+/**
+ * Merge accumulated text into a message while preserving SDK format.
+ * Returns a new message with updated content field.
+ */
+function mergeMessageContent(existingMsg: StreamMessage, newMsg: StreamMessage, accumulatedText: string): StreamMessage {
+  const existingContent = 'content' in existingMsg ? existingMsg.content : undefined;
+
+  // If content is array format, rebuild array with accumulated text in text blocks
+  if (Array.isArray(existingContent)) {
+    return {
+      ...newMsg,
+      content: existingContent.map((block, idx) => {
+        if (typeof block === 'string') {
+          // Distribute accumulated text to first string block only
+          return idx === 0 ? accumulatedText : '';
+        }
+        if (block && typeof block === 'object' && 'text' in block) {
+          return { ...block, text: accumulatedText };
+        }
+        return block;
+      })
+    } as StreamMessage;
+  }
+
+  // If content is object with text field
+  if (existingContent && typeof existingContent === 'object' && !Array.isArray(existingContent)) {
+    return {
+      ...newMsg,
+      content: { ...existingContent, text: accumulatedText }
+    } as StreamMessage;
+  }
+
+  // Default: use simple string format
+  return { ...newMsg, content: accumulatedText } as StreamMessage;
+}
+
+/**
+ * Normalize message content to handle SDK 0.1.14 format variations.
+ * Ensures backward compatibility with legacy `value` field.
+ */
+function normalizeMessageContent(message: StreamMessage): StreamMessage {
+  if (!('content' in message) || message.content === undefined) {
+    return message;
+  }
+
+  const content = message.content;
+
+  // Handle legacy format with `value` instead of `content`
+  if (content && typeof content === 'object' && 'value' in content && !('text' in content)) {
+    return {
+      ...message,
+      content: { text: String((content as { value?: unknown }).value ?? '') }
+    } as StreamMessage;
+  }
+
+  return message;
 }
 
 function createSession(id: string): SessionView {
@@ -209,11 +352,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         set((state) => {
           const existing = state.sessions[sessionId] ?? createSession(sessionId);
           const messages = [...existing.messages];
-          
+
           // Get message ID (uuid for SDK messages)
           const msgId = 'uuid' in message ? message.uuid : undefined;
           const msgType = message.type;
-          
+
           if (msgId) {
             // Find existing message with same ID
             const existingIdx = messages.findIndex(
@@ -223,23 +366,22 @@ export const useAppStore = create<AppState>((set, get) => ({
               // For streaming messages, ACCUMULATE content (SDK sends deltas)
               if (msgType === "reasoning" || msgType === "assistant") {
                 const existingMsg = messages[existingIdx];
-                const existingContent = 'content' in existingMsg ? existingMsg.content : "";
-                const newContent = 'content' in message ? message.content : "";
-                messages[existingIdx] = {
-                  ...message,
-                  content: existingContent + newContent
-                } as StreamMessage;
+                // Extract text from content using SDK 0.1.14 compatible method
+                const existingText = extractMessageContent(existingMsg);
+                const newText = extractMessageContent(message);
+                // Merge content preserving new format
+                messages[existingIdx] = mergeMessageContent(existingMsg, message, existingText + newText);
               } else {
-                // Other messages: replace
-                messages[existingIdx] = message;
+                // Other messages: replace with normalized content
+                messages[existingIdx] = normalizeMessageContent(message);
               }
             } else {
-              messages.push(message);
+              messages.push(normalizeMessageContent(message));
             }
           } else {
-            messages.push(message);
+            messages.push(normalizeMessageContent(message));
           }
-          
+
           return {
             sessions: {
               ...state.sessions,
