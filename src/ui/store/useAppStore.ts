@@ -55,6 +55,7 @@ export type SessionView = {
   title: string;
   status: SessionStatus;
   cwd?: string;
+  agentId?: string;
   messages: StreamMessage[];
   permissionRequests: PermissionRequest[];
   lastPrompt?: string;
@@ -63,9 +64,38 @@ export type SessionView = {
   hydrated: boolean;
 };
 
+// Agent-related types
+export interface MemoryBlock {
+  id: string;
+  label: string;
+  value: string;
+  limit?: number;
+}
+
+export interface ToolAttachment {
+  id: string;
+  name: string;
+  description?: string;
+  enabled: boolean;
+}
+
+export interface Agent {
+  id: string;
+  name: string;
+  model: string;
+  systemMessage?: string;
+  temperature?: number;
+  memoryBlocks: MemoryBlock[];
+  tools: ToolAttachment[];
+  createdAt: number;
+  updatedAt: number;
+}
+
 interface AppState {
   sessions: Record<string, SessionView>;
   activeSessionId: string | null;
+  selectedAgentId: string | null;
+  agents: Record<string, Agent>;
   prompt: string;
   cwd: string;
   pendingStart: boolean;
@@ -80,6 +110,8 @@ interface AppState {
   setGlobalError: (error: string | null) => void;
   setShowStartModal: (show: boolean) => void;
   setActiveSessionId: (id: string | null) => void;
+  setSelectedAgentId: (id: string | null) => void;
+  updateAgent: (agent: Agent) => void;
   markHistoryRequested: (sessionId: string) => void;
   resolvePermissionRequest: (sessionId: string, toolUseId: string) => void;
   handleServerEvent: (event: ServerEvent) => void;
@@ -192,6 +224,8 @@ function createSession(id: string): SessionView {
 export const useAppStore = create<AppState>((set, get) => ({
   sessions: {},
   activeSessionId: null,
+  selectedAgentId: null,
+  agents: {},
   prompt: "",
   cwd: "",
   pendingStart: false,
@@ -206,6 +240,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   setGlobalError: (globalError) => set({ globalError }),
   setShowStartModal: (showStartModal) => set({ showStartModal }),
   setActiveSessionId: (id) => set({ activeSessionId: id }),
+  setSelectedAgentId: (id) => set({ selectedAgentId: id }),
+  updateAgent: (agent) => set((state) => ({
+    agents: { ...state.agents, [agent.id]: agent }
+  })),
 
   markHistoryRequested: (sessionId) => {
     set((state) => {
@@ -296,7 +334,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
 
       case "session.status": {
-        const { sessionId, status, title, cwd } = event.payload;
+        const { sessionId, status, title, cwd, agentId } = event.payload as { sessionId: string; status: SessionStatus; title?: string; cwd?: string; agentId?: string };
         set((state) => {
           const existing = state.sessions[sessionId] ?? createSession(sessionId);
           return {
@@ -307,6 +345,7 @@ export const useAppStore = create<AppState>((set, get) => ({
                 status,
                 title: title ?? existing.title,
                 cwd: cwd ?? existing.cwd,
+                agentId: agentId ?? existing.agentId,
                 updatedAt: Date.now()
               }
             }
@@ -315,6 +354,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
         if (state.pendingStart) {
           get().setActiveSessionId(sessionId);
+          if (agentId) {
+            get().setSelectedAgentId(agentId);
+          }
           set({ pendingStart: false, showStartModal: false, prompt: "" });
         }
         break;
