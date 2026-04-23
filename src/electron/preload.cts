@@ -24,10 +24,16 @@ electron.contextBridge.exposeInMainWorld("electron", {
         return () => electron.ipcRenderer.off("server-event", cb);
     },
 
-    getRecentCwds: (limit?: number) => 
+    getRecentCwds: (limit?: number) =>
         ipcInvoke("get-recent-cwds", limit),
-    selectDirectory: () => 
-        ipcInvoke("select-directory")
+    selectDirectory: () =>
+        ipcInvoke("select-directory"),
+
+    // Config APIs
+    getConfig: () =>
+        ipcInvoke("get-config"),
+    saveConfig: (config: { serverUrl?: string; apiKey?: string; permissionMode?: 'strict' | 'bypass'; windowWidth?: number; windowHeight?: number; theme?: 'light' | 'dark'; pollingInterval?: number }) =>
+        ipcInvoke("save-config", config),
 } satisfies Window['electron'])
 
 function ipcInvoke<Key extends keyof EventPayloadMapping>(key: Key, ...args: any[]): Promise<EventPayloadMapping[Key]> {

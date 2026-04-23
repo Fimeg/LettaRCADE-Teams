@@ -12,12 +12,24 @@ type StaticData = {
 
 type UnsubscribeFunction = () => void;
 
+type ConfigData = {
+    serverUrl: string;
+    apiKey?: string;
+    permissionMode: 'strict' | 'bypass';
+    windowWidth: number;
+    windowHeight: number;
+    theme: 'light' | 'dark';
+    pollingInterval: number;
+}
+
 type EventPayloadMapping = {
     statistics: Statistics;
     getStaticData: StaticData;
     "generate-session-title": string;
     "get-recent-cwds": string[];
     "select-directory": string | null;
+    "get-config": ConfigData;
+    "save-config": ConfigData;
 }
 
 interface Window {
@@ -29,5 +41,8 @@ interface Window {
         onServerEvent: (callback: (event: any) => void) => UnsubscribeFunction;
         getRecentCwds: (limit?: number) => Promise<string[]>;
         selectDirectory: () => Promise<string | null>;
+        // Config APIs
+        getConfig: () => Promise<ConfigData>;
+        saveConfig: (config: Partial<ConfigData>) => Promise<ConfigData>;
     }
 }

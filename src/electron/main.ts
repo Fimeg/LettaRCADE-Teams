@@ -3,6 +3,9 @@ import { execSync } from "child_process";
 import { config as dotenvConfig } from "dotenv";
 import { join } from "path";
 import { ipcMainHandle, isDev, DEV_PORT } from "./util.js";
+import { loadConfig, saveConfig, type Config } from "./config.js";
+import { initDatabase, closeDatabase, saveSession, getAllSessions, deleteSession, updateSessionStatus } from "./db.js";
+import type { ClientEvent, ServerEvent } from "./types.js";
 
 // Load .env file from project root
 dotenvConfig({ path: join(process.cwd(), ".env") });
@@ -33,10 +36,28 @@ try {
 import { getPreloadPath, getUIPath, getIconPath } from "./pathResolver.js";
 import { getStaticData, pollResources, stopPolling } from "./test.js";
 import { handleClientEvent, cleanupAllSessions } from "./ipc-handlers.js";
-import type { ClientEvent } from "./types.js";
 
 let cleanupComplete = false;
 let mainWindow: BrowserWindow | null = null;
+let appConfig: Config;
+
+// IPC validation helper
+function validateClientEvent(data: unknown): data is ClientEvent {
+  if (!data || typeof data !== 'object') return false;
+  const event = data as Record<string, unknown>;
+  if (typeof event.type !== 'string') return false;
+  if (event.payload !== undefined && typeof event.payload !== 'object') return false;
+  const validTypes = ['session.start', 'session.continue', 'session.stop', 'session.delete', 'session.list', 'session.history', 'permission.response'];
+  return validTypes.includes(event.type);
+}
+
+function validateServerEvent(data: unknown): data is ServerEvent {
+  if (!data || typeof data !== 'object') return false;
+  const event = data as Record<string, unknown>;
+  if (typeof event.type !== 'string') return false;
+  const validTypes = ['stream.message', 'stream.user_prompt', 'session.status', 'session.list', 'session.history', 'session.deleted', 'permission.request', 'runner.error'];
+  return validTypes.includes(event.type);
+}
 
 function killViteDevServer(): void {
     if (!isDev()) return;
@@ -55,9 +76,18 @@ function cleanup(): void {
     if (cleanupComplete) return;
     cleanupComplete = true;
 
+    // Save window size to config
+    if (mainWindow && appConfig) {
+        const bounds = mainWindow.getBounds();
+        appConfig.windowWidth = bounds.width;
+        appConfig.windowHeight = bounds.height;
+        saveConfig(appConfig);
+    }
+
     globalShortcut.unregisterAll();
     stopPolling();
     cleanupAllSessions();
+    closeDatabase();
     killViteDevServer();
 }
 
@@ -68,6 +98,10 @@ function handleSignal(): void {
 
 // Initialize everything when app is ready
 app.on("ready", () => {
+    // Initialize config and database
+    appConfig = loadConfig();
+    initDatabase();
+
     Menu.setApplicationMenu(null);
     // Setup event handlers
     app.on("before-quit", cleanup);
@@ -81,19 +115,36 @@ app.on("ready", () => {
     process.on("SIGINT", handleSignal);
     process.on("SIGHUP", handleSignal);
 
-    // Create main window
+    // Create main window using config values
     mainWindow = new BrowserWindow({
-        width: 1200,
-        height: 800,
+        width: appConfig.windowWidth,
+        height: appConfig.windowHeight,
         minWidth: 900,
         minHeight: 600,
         webPreferences: {
             preload: getPreloadPath(),
+            contextIsolation: true,
+            nodeIntegration: false,
         },
         icon: getIconPath(),
         titleBarStyle: "hiddenInset",
-        backgroundColor: "#FAF9F6",
+        backgroundColor: appConfig.theme === 'dark' ? '#1a1a1a' : '#FAF9F6',
         trafficLightPosition: { x: 15, y: 18 }
+    });
+
+    // Add Content-Security-Policy
+    mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+        callback({
+            responseHeaders: {
+                ...details.responseHeaders,
+                'Content-Security-Policy': [
+                    "default-src 'self'; " +
+                    "connect-src 'self' http://localhost:* https://api.letta.com; " +
+                    "script-src 'self'; " +
+                    "style-src 'self' 'unsafe-inline'"
+                ]
+            }
+        });
     });
 
     if (isDev()) mainWindow.loadURL(`http://localhost:${DEV_PORT}`)
@@ -110,14 +161,34 @@ app.on("ready", () => {
         return getStaticData();
     });
 
-    // Handle client events
-    ipcMain.on("client-event", (_: Electron.IpcMainEvent, event: ClientEvent) => {
-        handleClientEvent(event);
+    // Handle client events with validation
+    ipcMain.on("client-event", (event: Electron.IpcMainEvent, data: unknown) => {
+        if (!validateClientEvent(data)) {
+            console.error('Invalid client event received:', data);
+            event.sender.send('server-event', JSON.stringify({
+                type: 'runner.error',
+                payload: { message: 'Invalid client event' }
+            }));
+            return;
+        }
+        handleClientEvent(data);
     });
 
-    // Handle recent cwds request (simplified - no local storage)
+    // Handle recent cwds request
     ipcMainHandle("get-recent-cwds", () => {
-        return [process.cwd()]; // Just return current directory
+        // TODO: Load from config or database
+        return [process.cwd()];
+    });
+
+    // Handle config operations
+    ipcMainHandle("get-config", () => {
+        return appConfig;
+    });
+
+    ipcMainHandle("save-config", (_: Electron.IpcMainInvokeEvent, config: Config) => {
+        appConfig = { ...appConfig, ...config };
+        saveConfig(appConfig);
+        return appConfig;
     });
 
     // Handle directory selection
