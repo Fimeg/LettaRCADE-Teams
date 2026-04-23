@@ -33,6 +33,17 @@ export type RunnerHandle = {
 const DEFAULT_CWD = process.cwd();
 const DEBUG = process.env.DEBUG_RUNNER === "true";
 
+// Load polling interval from config (use default if not available)
+const POLLING_INTERVAL = (() => {
+  try {
+    // Dynamic import to avoid circular dependency issues
+    const config = require('../config.js');
+    return config.loadConfig().pollingInterval || 5000;
+  } catch {
+    return 5000;
+  }
+})();
+
 // Simple logger for runner
 const log = (msg: string, data?: Record<string, unknown>) => {
   const timestamp = new Date().toISOString();

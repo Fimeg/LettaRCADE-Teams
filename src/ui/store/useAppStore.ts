@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { agentsApi } from '../services/api';
 import type { ServerEvent, SessionStatus, StreamMessage } from "../types";
 
 export type PermissionRequest = {
@@ -112,7 +113,7 @@ interface AppState {
   setActiveSessionId: (id: string | null) => void;
   setSelectedAgentId: (id: string | null) => void;
   updateAgent: (agent: Agent) => void;
-  updateMemoryBlock: (agentId: string, blockId: string, newValue: string) => Promise<void>;
+  updateMemoryBlock: (agentId: string, blockLabel: string, newValue: string) => Promise<void>;
   updateMemoryBlocks: (agentId: string, blocks: MemoryBlock[]) => void;
   markHistoryRequested: (sessionId: string) => void;
   resolvePermissionRequest: (sessionId: string, toolUseId: string) => void;
@@ -247,14 +248,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     agents: { ...state.agents, [agent.id]: agent }
   })),
 
-  updateMemoryBlock: async (agentId, blockId, newValue) => {
-    // Mock API call - update local state immediately
+  updateMemoryBlock: async (agentId, blockLabel, newValue) => {
+    // Update local state immediately for responsiveness
     set((state) => {
       const agent = state.agents[agentId];
       if (!agent) return {};
 
       const updatedBlocks = agent.memoryBlocks.map(block =>
-        block.id === blockId ? { ...block, value: newValue } : block
+        block.label === blockLabel ? { ...block, value: newValue } : block
       );
 
       return {
@@ -265,8 +266,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       };
     });
 
-    // TODO: Replace with actual API call when available
-    // await api.updateMemoryBlock(agentId, blockId, newValue);
+    // Sync to API (community-ade uses label as identifier)
+    try {
+      await agentsApi.updateMemoryBlock(agentId, blockLabel, newValue);
+    } catch (error) {
+      console.error('[useAppStore] Failed to update memory block:', error);
+      // Revert on error by re-fetching
+      const blocks = await agentsApi.getMemoryBlocks(agentId);
+      get().updateMemoryBlocks(agentId, blocks);
+    }
   },
 
   updateMemoryBlocks: (agentId, blocks) => {
