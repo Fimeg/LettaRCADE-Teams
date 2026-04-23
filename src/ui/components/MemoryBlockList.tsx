@@ -4,11 +4,32 @@ import type { MemoryBlock } from "../store/useAppStore";
 interface MemoryBlockListProps {
   blocks: MemoryBlock[];
   readOnly?: boolean;
-  onEditBlock?: (block: MemoryBlock) => void;
+  onEditBlock?: (block: MemoryBlock, newValue: string) => void;
 }
 
 export function MemoryBlockList({ blocks, readOnly = true, onEditBlock }: MemoryBlockListProps) {
   const [expandedBlock, setExpandedBlock] = useState<string | null>(null);
+  const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState<string>('');
+
+  function startEdit(block: MemoryBlock) {
+    setEditingBlockId(block.id);
+    setEditContent(block.value);
+  }
+
+  function handleSave(blockId: string) {
+    const block = blocks.find(b => b.id === blockId);
+    if (block && onEditBlock) {
+      onEditBlock(block, editContent);
+    }
+    setEditingBlockId(null);
+    setEditContent('');
+  }
+
+  function handleCancel() {
+    setEditingBlockId(null);
+    setEditContent('');
+  }
 
   if (blocks.length === 0) {
     return (
@@ -75,16 +96,46 @@ export function MemoryBlockList({ blocks, readOnly = true, onEditBlock }: Memory
                 )}
               </div>
             </div>
-            <div className="mt-2 text-xs text-ink-600 font-mono whitespace-pre-wrap break-words leading-relaxed">
-              {displayValue}
-            </div>
-            {block.value.length > 100 && (
-              <button
-                onClick={() => setExpandedBlock(isExpanded ? null : block.id)}
-                className="mt-2 text-xs text-accent hover:text-accent-hover transition-colors"
-              >
-                {isExpanded ? "Show less" : "Show more"}
-              </button>
+            {editingBlockId === block.id ? (
+              <div className="mt-2">
+                <textarea
+                  value={editContent}
+                  onChange={(e) => setEditContent(e.target.value)}
+                  rows={6}
+                  className="w-full rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-xs font-mono text-ink-800 focus:border-accent focus:outline-none resize-vertical"
+                />
+                <div className="mt-2 flex gap-2">
+                  <button
+                    onClick={() => handleSave(block.id)}
+                    className="px-3 py-1.5 text-xs font-medium rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors"
+                  >
+                    Save
+                  </button>
+                  <button
+                    onClick={handleCancel}
+                    className="px-3 py-1.5 text-xs font-medium rounded-lg bg-surface-tertiary text-ink-600 hover:bg-surface-tertiary/80 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div
+                  className={`mt-2 text-xs text-ink-600 font-mono whitespace-pre-wrap break-words leading-relaxed ${!readOnly ? 'cursor-pointer hover:text-ink-800' : ''}`}
+                  onClick={() => !readOnly && startEdit(block)}
+                >
+                  {displayValue}
+                </div>
+                {block.value.length > 100 && (
+                  <button
+                    onClick={() => setExpandedBlock(isExpanded ? null : block.id)}
+                    className="mt-2 text-xs text-accent hover:text-accent-hover transition-colors"
+                  >
+                    {isExpanded ? "Show less" : "Show more"}
+                  </button>
+                )}
+              </>
             )}
           </div>
         );

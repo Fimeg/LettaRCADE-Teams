@@ -112,6 +112,7 @@ interface AppState {
   setActiveSessionId: (id: string | null) => void;
   setSelectedAgentId: (id: string | null) => void;
   updateAgent: (agent: Agent) => void;
+  updateMemoryBlock: (agentId: string, blockId: string, newValue: string) => Promise<void>;
   markHistoryRequested: (sessionId: string) => void;
   resolvePermissionRequest: (sessionId: string, toolUseId: string) => void;
   handleServerEvent: (event: ServerEvent) => void;
@@ -244,6 +245,28 @@ export const useAppStore = create<AppState>((set, get) => ({
   updateAgent: (agent) => set((state) => ({
     agents: { ...state.agents, [agent.id]: agent }
   })),
+
+  updateMemoryBlock: async (agentId, blockId, newValue) => {
+    // Mock API call - update local state immediately
+    set((state) => {
+      const agent = state.agents[agentId];
+      if (!agent) return {};
+
+      const updatedBlocks = agent.memoryBlocks.map(block =>
+        block.id === blockId ? { ...block, value: newValue } : block
+      );
+
+      return {
+        agents: {
+          ...state.agents,
+          [agentId]: { ...agent, memoryBlocks: updatedBlocks, updatedAt: Date.now() }
+        }
+      };
+    });
+
+    // TODO: Replace with actual API call when available
+    // await api.updateMemoryBlock(agentId, blockId, newValue);
+  },
 
   markHistoryRequested: (sessionId) => {
     set((state) => {

@@ -10,6 +10,7 @@ import type {
   StreamMessage,
 } from "../types";
 import type { PermissionRequest } from "../store/useAppStore";
+import { extractBlockText } from "../store/useAppStore";
 import MDContent from "../render/markdown";
 import { DecisionPanel } from "./DecisionPanel";
 
@@ -85,14 +86,15 @@ const ToolResultCard = ({ message }: { message: SDKToolResultMessage }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const isFirstRender = useRef(true);
-  
+
   const isError = message.isError;
+  const contentText = extractBlockText(message.content);
   let lines: string[];
-  
+
   if (isError) {
-    lines = [extractTagContent(message.content, "tool_use_error") || message.content];
+    lines = [extractTagContent(contentText, "tool_use_error") || contentText];
   } else {
-    lines = message.content.split("\n");
+    lines = contentText.split("\n");
   }
 
   const isMarkdownContent = isMarkdown(lines.join("\n"));
@@ -125,26 +127,32 @@ const ToolResultCard = ({ message }: { message: SDKToolResultMessage }) => {
 };
 
 // Assistant Message Card
-const AssistantCard = ({ message, showIndicator = false }: { message: SDKAssistantMessage; showIndicator?: boolean }) => (
-  <div className="flex flex-col mt-4">
-    <div className="header text-accent flex items-center gap-2">
-      <StatusDot variant="success" isActive={showIndicator} isVisible={showIndicator} />
-      Assistant
+const AssistantCard = ({ message, showIndicator = false }: { message: SDKAssistantMessage; showIndicator?: boolean }) => {
+  const contentText = extractBlockText(message.content);
+  return (
+    <div className="flex flex-col mt-4">
+      <div className="header text-accent flex items-center gap-2">
+        <StatusDot variant="success" isActive={showIndicator} isVisible={showIndicator} />
+        Assistant
+      </div>
+      <MDContent text={contentText} />
     </div>
-    <MDContent text={message.content} />
-  </div>
-);
+  );
+};
 
 // Reasoning Card
-const ReasoningCard = ({ message, showIndicator = false }: { message: SDKReasoningMessage; showIndicator?: boolean }) => (
-  <div className="flex flex-col mt-4">
-    <div className="header text-accent flex items-center gap-2">
-      <StatusDot variant="success" isActive={showIndicator} isVisible={showIndicator} />
-      Thinking
+const ReasoningCard = ({ message, showIndicator = false }: { message: SDKReasoningMessage; showIndicator?: boolean }) => {
+  const contentText = extractBlockText(message.content);
+  return (
+    <div className="flex flex-col mt-4">
+      <div className="header text-accent flex items-center gap-2">
+        <StatusDot variant="success" isActive={showIndicator} isVisible={showIndicator} />
+        Thinking
+      </div>
+      <MDContent text={contentText} />
     </div>
-    <MDContent text={message.content} />
-  </div>
-);
+  );
+};
 
 // Tool Call Card
 const ToolCallCard = ({ 
