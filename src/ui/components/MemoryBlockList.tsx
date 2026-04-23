@@ -78,7 +78,7 @@ export function MemoryBlockList({ blocks, readOnly = true, onEditBlock }: Memory
                 )}
                 {!readOnly && onEditBlock && (
                   <button
-                    onClick={() => onEditBlock(block)}
+                    onClick={() => startEdit(block)}
                     className="rounded-lg p-1.5 text-ink-500 hover:bg-ink-900/10 hover:text-accent transition-colors"
                     aria-label="Edit memory block"
                   >

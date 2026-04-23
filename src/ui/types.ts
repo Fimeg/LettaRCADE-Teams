@@ -3,7 +3,7 @@
  * Re-exports SDK 0.1.14 types with UI-specific extensions.
  */
 
-// Re-export all SDK message types
+// Re-export all SDK message types (only types that exist in SDK 0.1.14)
 export type {
   SDKMessage,
   SDKInitMessage,
@@ -35,7 +35,6 @@ export type {
   AgentToolUpdateCallback,
   CreateSessionOptions,
   CreateAgentOptions,
-  InternalSessionOptions,
   ListMessagesOptions,
   ListMessagesResult,
   BootstrapStateOptions,
@@ -43,20 +42,49 @@ export type {
   RunTurnOptions,
   RecoverPendingApprovalsOptions,
   RecoverPendingApprovalsResult,
-  ExecuteExternalToolRequest,
   SkillSource,
   SleeptimeTrigger,
   SleeptimeBehavior,
   SleeptimeOptions,
   EffectiveSleeptimeSettings,
-  SystemPromptPreset,
-  SystemPromptPresetConfigSDK,
-  SystemPromptConfig,
-  BlockReference,
-  MemoryItem,
-  MemoryPreset,
   PermissionMode,
 } from "@letta-ai/letta-code-sdk";
+
+// UI-specific types not in SDK
+export type InternalSessionOptions = {
+  agentId?: string;
+  conversationId?: string;
+  model?: string;
+  tools?: string[];
+  memfsEnabled?: boolean;
+  skillSources?: import("@letta-ai/letta-code-sdk").SkillSource[];
+  systemInfoReminderEnabled?: boolean;
+  sleeptime?: import("@letta-ai/letta-code-sdk").SleeptimeOptions;
+};
+
+export type SystemPromptPreset = "default" | "letta-claude" | "letta-codex" | "letta-gemini" | "claude" | "codex" | "gemini";
+
+export interface SystemPromptPresetConfigSDK {
+  preset?: SystemPromptPreset;
+  custom?: string;
+}
+
+export type SystemPromptConfig = string | SystemPromptPresetConfigSDK;
+
+export interface BlockReference {
+  type: "block";
+  name?: string;
+  label: string;
+}
+
+export type MemoryItem = string | { label: string; value: string; limit?: number } | BlockReference;
+
+export type MemoryPreset = "persona" | "human" | "skills" | "loaded_skills";
+
+export interface ExecuteExternalToolRequest {
+  toolName: string;
+  toolInput: Record<string, unknown>;
+}
 
 // UI-specific message type (not in SDK)
 export type UserPromptMessage = {
