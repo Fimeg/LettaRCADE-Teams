@@ -3,9 +3,11 @@ import { Panel, Group as PanelGroup, Separator as Separator } from "react-resiza
 import { useAppStore } from "../store/useAppStore";
 import { useMessageWindow } from "../hooks/useMessageWindow";
 import { useIPC } from "../hooks/useIPC";
-import { agentsApi, chatApi } from "../services/api";
+import { useStreamingMessages } from "../hooks/useStreamingMessages";
+import { useMessageHistory } from "../hooks/useMessageHistory";
+import { agentsApi } from "../services/api";
 import { slashCommandHandlers } from "../services/slashCommands";
-import type { ClientEvent, ServerEvent, StreamMessage } from "../types";
+import type { ClientEvent, ServerEvent } from "../types";
 import { MessageCard } from "./EventCard";
 import MDContent from "../render/markdown";
 import { AgentMemoryPanel } from "./AgentMemoryPanel";
@@ -118,13 +120,18 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
   const [inputValue, setInputValue] = useState('');
   const [showSlashCommands, setShowSlashCommands] = useState(false);
 
-  // API-loaded messages
-  const [messages, setMessages] = useState<StreamMessage[]>([]);
-  const [isLoadingMessages, setIsLoadingMessages] = useState(false);
-  const [messagesError, setMessagesError] = useState<string | null>(null);
+  // Hooks for messages and streaming
+  const {
+    messages,
+    isLoading: isLoadingMessages,
+    error: messagesError,
+    loadMessages,
+  } = useMessageHistory(activeConversationId);
 
-  // Streaming state
-  const [isStreaming, setIsStreaming] = useState(false);
+  const {
+    sendMessage: streamMessage,
+    isStreaming,
+  } = useStreamingMessages(agentId, activeConversationId);
 
   // Load agent if not loaded
   useEffect(() => {
@@ -147,72 +154,6 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
       loadAgentTools();
     }
   }, [agentId, settingsTab]);
-
-  // Load messages when conversation changes
-  useEffect(() => {
-    if (!activeConversationId) {
-      setMessages([]);
-      return;
-    }
-
-    const loadMessages = async () => {
-      setIsLoadingMessages(true);
-      setMessagesError(null);
-      try {
-        const apiMessages = await chatApi.getMessages(activeConversationId);
-        const streamMessages: StreamMessage[] = apiMessages.map((msg): StreamMessage => {
-          const msgWithProps = msg as {
-            id?: string;
-            content?: unknown;
-            role?: string;
-            created_at?: string | number;
-          };
-
-          let content = '';
-          if (typeof msgWithProps.content === 'string') {
-            content = msgWithProps.content;
-          } else if (msgWithProps.content && typeof msgWithProps.content === 'object') {
-            const contentObj = msgWithProps.content as { text?: string; [key: string]: unknown };
-            if ('text' in contentObj && typeof contentObj.text === 'string') {
-              content = contentObj.text;
-            } else if (Array.isArray(msgWithProps.content)) {
-              interface ContentBlock {
-                type?: string;
-                text?: string;
-              }
-              content = msgWithProps.content
-                .filter((c: ContentBlock) => c.type === 'text' || typeof c.text === 'string')
-                .map((c: ContentBlock) => c.text || '')
-                .join('');
-            }
-          }
-
-          const baseMessage = {
-            uuid: msgWithProps.id || `msg-${Date.now()}`,
-            createdAt: msgWithProps.created_at ? new Date(msgWithProps.created_at).getTime() : Date.now(),
-          };
-
-          if (msgWithProps.role === 'user') {
-            return { ...baseMessage, type: 'user_prompt' as const, prompt: content };
-          } else if (msgWithProps.role === 'assistant') {
-            return { ...baseMessage, type: 'assistant' as const, content };
-          } else if (msgWithProps.role === 'system') {
-            return { ...baseMessage, type: 'system' as const, content };
-          } else {
-            return { ...baseMessage, type: 'assistant' as const, content };
-          }
-        });
-        setMessages(streamMessages);
-      } catch (err) {
-        setMessagesError(err instanceof Error ? err.message : 'Failed to load messages');
-        console.error('[AgentWorkspace] Failed to load messages:', err);
-      } finally {
-        setIsLoadingMessages(false);
-      }
-    };
-
-    loadMessages();
-  }, [activeConversationId, agentId]);
 
   // Handle partial messages from stream events
   const handlePartialMessages = useCallback((partialEvent: ServerEvent) => {
@@ -550,31 +491,16 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
   const handleSlashCommand = useCallback(async (cmd: string, args: string = '') => {
     const cmdDef = SLASH_COMMANDS.find(c => c.id === cmd);
     if (!cmdDef) {
-      setMessages(prev => [...prev, {
-        uuid: `error-${Date.now()}`,
-        createdAt: Date.now(),
-        type: 'system' as const,
-        content: `Unknown command: /${cmd}. Available: ${SLASH_COMMANDS.map(c => `/${c.id}`).join(', ')}`,
-      }]);
+      console.warn(`[AgentWorkspace] Unknown command: /${cmd}. Available: ${SLASH_COMMANDS.map(c => `/${c.id}`).join(', ')}`);
       return;
     }
 
     if (!activeConversationId && cmd !== 'doctor' && cmd !== 'recompile') {
-      setMessages(prev => [...prev, {
-        uuid: `error-${Date.now()}`,
-        createdAt: Date.now(),
-        type: 'system' as const,
-        content: `No active conversation. Cannot run /${cmd}.`,
-      }]);
+      console.warn(`[AgentWorkspace] No active conversation. Cannot run /${cmd}.`);
       return;
     }
 
-    setMessages(prev => [...prev, {
-      uuid: `system-${Date.now()}`,
-      createdAt: Date.now(),
-      type: 'system' as const,
-      content: `Running /${cmd}...`,
-    }]);
+    console.log(`[AgentWorkspace] Running /${cmd}...`);
 
     try {
       const handler = slashCommandHandlers[cmd];
@@ -582,32 +508,20 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
 
       const result = await handler(agentId, activeConversationId, args);
 
-      setMessages(prev => [...prev, {
-        uuid: `${result.success ? 'system' : 'error'}-${Date.now()}`,
-        createdAt: Date.now(),
-        type: 'system' as const,
-        content: result.success
-          ? `/${cmd} completed: ${result.message}`
-          : `/${cmd} failed: ${result.message}`,
-      }]);
+      console.log(`[AgentWorkspace] /${cmd} ${result.success ? 'completed' : 'failed'}: ${result.message}`);
 
       if (result.success) {
         if (result.action === 'clear_messages') {
-          setMessages([]);
+          await loadMessages(activeConversationId || '');
           loadAgent(agentId);
         } else if (result.action === 'reload_agent') {
           loadAgent(agentId);
         }
       }
     } catch (err) {
-      setMessages(prev => [...prev, {
-        uuid: `error-${Date.now()}`,
-        createdAt: Date.now(),
-        type: 'system' as const,
-        content: `/${cmd} error: ${err instanceof Error ? err.message : 'Unknown error'}`,
-      }]);
+      console.error(`[AgentWorkspace] /${cmd} error:`, err);
     }
-  }, [agentId, activeConversationId, loadAgent]);
+  }, [agentId, activeConversationId, loadAgent, loadMessages]);
 
   // ═══ MESSAGE SENDING WITH STREAMING ═══
 
@@ -623,21 +537,11 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
           conversationId = newConv.id;
           setActiveConversationId(newConv.id);
         } else {
-          setMessages(prev => [...prev, {
-            uuid: `error-${Date.now()}`,
-            createdAt: Date.now(),
-            type: 'system' as const,
-            content: 'Failed to create conversation. Please try again.',
-          }]);
+          console.error('[AgentWorkspace] Failed to create conversation');
           return;
         }
       } catch (err) {
-        setMessages(prev => [...prev, {
-          uuid: `error-${Date.now()}`,
-          createdAt: Date.now(),
-          type: 'system' as const,
-          content: `Error creating conversation: ${err instanceof Error ? err.message : 'Unknown error'}`,
-        }]);
+        console.error('[AgentWorkspace] Error creating conversation:', err);
         return;
       }
     }
@@ -656,22 +560,13 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
       return;
     }
 
-    // Add user message to UI immediately
-    setMessages(prev => [...prev, {
-      uuid: `user-${Date.now()}`,
-      createdAt: Date.now(),
-      type: 'user_prompt' as const,
-      prompt: userMsg,
-    }]);
-
     // Start streaming
-    setIsStreaming(true);
     setShowPartialMessage(true);
     partialMessageRef.current = '';
     setPartialMessage('');
 
     try {
-      const stream = chatApi.streamMessage(conversationId, userMsg, { agentId });
+      const stream = streamMessage(userMsg);
       let assistantContent = '';
 
       for await (const chunk of stream) {
@@ -685,58 +580,32 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
             }
             break;
           case 'reasoning':
-            setMessages(prev => [...prev, {
-              uuid: `reasoning-${Date.now()}`,
-              createdAt: Date.now(),
-              type: 'reasoning' as const,
-              content: chunk.reasoning,
-            }]);
+            // Reasoning messages handled by hook - refresh messages to include them
+            await loadMessages(conversationId);
             break;
           case 'tool_call':
-            setMessages(prev => [...prev, {
-              uuid: `toolcall-${Date.now()}`,
-              createdAt: Date.now(),
-              type: 'system' as const,
-              content: `Tool call: ${chunk.name}(${JSON.stringify(chunk.arguments)})`,
-            }]);
+            // Tool call messages handled by hook - refresh messages
+            await loadMessages(conversationId);
             break;
           case 'tool_return':
-            setMessages(prev => [...prev, {
-              uuid: `toolret-${Date.now()}`,
-              createdAt: Date.now(),
-              type: 'system' as const,
-              content: `Tool result: ${chunk.output}`,
-            }]);
+            // Tool return messages handled by hook - refresh messages
+            await loadMessages(conversationId);
             break;
           case 'error':
-            setMessages(prev => [...prev, {
-              uuid: `error-${Date.now()}`,
-              createdAt: Date.now(),
-              type: 'system' as const,
-              content: `Error: ${chunk.message}`,
-            }]);
+            // Error displayed in UI via toast or partial message
+            partialMessageRef.current += `\n\nError: ${chunk.message}`;
+            setPartialMessage(partialMessageRef.current);
             break;
         }
       }
 
-      // Add final assistant message
-      if (assistantContent) {
-        setMessages(prev => [...prev, {
-          uuid: `assistant-${Date.now()}`,
-          createdAt: Date.now(),
-          type: 'assistant' as const,
-          content: assistantContent,
-        }]);
-      }
+      // Refresh messages to get the final assistant message from the server
+      await loadMessages(conversationId);
     } catch (err) {
-      setMessages(prev => [...prev, {
-        uuid: `error-${Date.now()}`,
-        createdAt: Date.now(),
-        type: 'system' as const,
-        content: `Stream error: ${err instanceof Error ? err.message : 'Unknown error'}`,
-      }]);
+      console.error('[AgentWorkspace] Stream error:', err);
+      partialMessageRef.current += `\n\nStream error: ${err instanceof Error ? err.message : 'Unknown error'}`;
+      setPartialMessage(partialMessageRef.current);
     } finally {
-      setIsStreaming(false);
       setShowPartialMessage(false);
       partialMessageRef.current = '';
       setPartialMessage('');

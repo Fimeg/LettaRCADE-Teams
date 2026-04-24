@@ -4,7 +4,7 @@
  * Uses agent-scoped messaging (client.agents.messages.create) following letta-code-new patterns.
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { getLettaClient } from "../services/api";
 import type {
   AssistantMessage,
@@ -45,19 +45,6 @@ export function useStreamingMessages(
 ): UseStreamingMessagesReturn {
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<Error | null>(null);
-  const abortRef = useRef<(() => void) | null>(null);
-
-  const sendMessage = useCallback(
-    function* (content: string): Generator<Promise<StreamChunk>, void, unknown> {
-      // This is a placeholder signature - the actual implementation returns an async generator
-      // TypeScript will infer correctly from the async generator function
-      return (async function* () {
-        // Should not reach here due to the async generator wrapper below
-        yield { type: "error" as const, error_type: "hook_error", message: "Invalid generator state" };
-      })();
-    },
-    []
-  );
 
   // Actual implementation using async generator pattern
   const sendMessageImpl = useCallback(
@@ -78,9 +65,11 @@ export function useStreamingMessages(
           body.conversation_id = conversationId;
         }
 
-        const stream = await client.agents.messages.create(agentId, body);
+        const response = await client.agents.messages.create(agentId, body);
+        // Handle different response formats - might be a stream or a single response
+        const stream = Array.isArray(response) ? response : [response];
 
-        for await (const chunk of stream) {
+        for (const chunk of stream) {
           const msg = chunk as LettaStreamingResponse;
           const messageType = (msg as unknown as { message_type: string }).message_type;
 
