@@ -11,7 +11,7 @@ Architecture reference lives in `CLAUDE.md` (do not duplicate here).
 | Subsystem | Status | Notes |
 |---|---|---|
 | Conversations | 🟡 basic | History loads (fixed 2026-04-24); create on first send; delete UI w/ confirm (2026-04-24); scoped per-conversation (fixed 2026-04-24) |
-| Messaging / streaming | 🟢 working | `client.conversations.messages.create` w/ streaming (fixed 2026-04-24 — was using agent-scoped endpoint → no replies, history bleed); tool/reasoning messages render |
+| Messaging / streaming | 🟢 working | Agent-scoped messaging via `useStreamingMessages` hook calling `client.agents.messages.create()` (refactored 2026-04-24 — eliminated chatApi wrapper, follows letta-code-new patterns); message history via `useMessageHistory` hook; tool/reasoning messages render |
 | Memory | 🟢 working | Curator health, sacred blocks, archival CRUD; visuals are basic bars |
 | Agents | 🟢 working | List / detail / edit / delete; creation wizard wired in `App.tsx` (2026-04-24); config form now pre-populates (was reading a non-existent `detail.raw` field) |
 | Slash commands | 🟢 working | `/doctor /clear /remember /recompile` via native client |
@@ -30,6 +30,17 @@ Architecture reference lives in `CLAUDE.md` (do not duplicate here).
 | — | Save-diff preview on settings | 🆕 new ask | Before applying, show "You're changing X from A to B" diff modal (user said "might add later") |
 | — | Server-setup wizard modal | subagent output saved (`a791e0752cac1fe22`) | Implement from that output |
 | — | Provider config panel | subagent output (unverified) | Audit output; may need re-spec |
+
+---
+
+## Recently shipped (today)
+
+**SDK Refactor (2026-04-24):**
+- Eliminated `chatApi` wrapper — now calling SDK directly via hooks
+- `useStreamingMessages.ts` — agent-scoped streaming (`client.agents.messages.create`)
+- `useMessageHistory.ts` — conversation-scoped history (`client.conversations.messages.list`)
+- `useAppStore.ts` — fixed dual message state, added AbortController for race conditions
+- `AgentWorkspace.tsx` — thin UI layer consuming hooks |
 
 ---
 
