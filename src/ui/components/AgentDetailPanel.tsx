@@ -21,6 +21,8 @@ function createMockAgent(id: string): Agent {
     temperature: 0.7,
     createdAt: Date.now() - 86400000,
     updatedAt: Date.now(),
+    conversations: [],
+    loaded: true,
     memoryBlocks: [
       {
         id: "human-1",

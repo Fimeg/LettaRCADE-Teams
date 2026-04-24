@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { agentsApi, chatApi } from '../services/api';
+import { agentsApi } from '../services/api';
 import type { Conversation as ApiConversation } from '../services/api';
 import type { ServerEvent, SessionStatus, StreamMessage } from "../types";
 

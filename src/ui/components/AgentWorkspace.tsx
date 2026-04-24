@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { useAppStore } from "../store/useAppStore";
 import { useMessageWindow } from "../hooks/useMessageWindow";
 import { useIPC } from "../hooks/useIPC";
-import type { ServerEvent } from "../types";
+import type { ClientEvent, ServerEvent } from "../types";
 import { MessageCard } from "./EventCard";
 import { PromptInput } from "./PromptInput";
 import MDContent from "../render/markdown";
@@ -15,7 +15,7 @@ const SCROLL_THRESHOLD = 50;
 interface AgentWorkspaceProps {
   agentId: string;
   onBack: () => void;
-  sendEvent: (event: ServerEvent) => void;
+  sendEvent: (event: ClientEvent) => void;
 }
 
 // Placeholder for slash commands - can be extended
@@ -93,13 +93,14 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
     handlePartialMessages(event);
   }, [handleServerEvent, handlePartialMessages]);
 
-  const { connected } = useIPC(onEvent);
+  // IPC connection handled at App level
+  useIPC(onEvent);
 
-  // Get active conversation messages
-  const activeConversation = agent?.conversations?.find(c => c.id === activeConversationId);
-  const messages = activeConversation?.messages ?? [];
-  const permissionRequests = activeConversation?.permissionRequests ?? [];
-  const isRunning = activeConversation?.status === "running";
+  // Chat state - placeholder until conversation messages are loaded from API
+  // TODO: Load actual conversation messages when API supports it
+  const messages: any[] = [];
+  const permissionRequests: any[] = [];
+  const isRunning = false;
 
   const {
     visibleMessages,
@@ -266,7 +267,7 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
             >
               {agent.conversations.map((conv) => (
                 <option key={conv.id} value={conv.id}>
-                  {conv.name || `Conversation ${conv.id.slice(0, 8)}`}
+                  {`Conversation ${conv.id.slice(0, 8)}`}
                 </option>
               ))}
             </select>
@@ -299,7 +300,7 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
       </header>
 
       {/* 3-Pane Layout */}
-      <PanelGroup direction="horizontal" className="flex-1">
+      <PanelGroup orientation="horizontal" className="flex-1">
         {/* Left: Memory Panel */}
         <Panel defaultSize={25} minSize={15} maxSize={40}>
           <AgentMemoryPanel agentId={agentId} />
