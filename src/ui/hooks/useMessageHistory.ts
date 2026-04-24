@@ -118,14 +118,17 @@ export function useMessageHistory(conversationId: string | null): UseMessageHist
     }
 
     try {
+      console.log(`[useMessageHistory] Loading messages for conversation ${convId}`);
       const client = getLettaClient();
       const response = await client.conversations.messages.list(convId, {
         limit: 200,
         order: "asc",
       });
+      console.log(`[useMessageHistory] Got response:`, typeof response, Array.isArray(response) ? `array[${response.length}]` : 'object');
 
       // Handle both array and paginated response formats
       const sdkMessages = Array.isArray(response) ? response : (response as { items?: Message[] }).items || [];
+      console.log(`[useMessageHistory] Parsed ${sdkMessages.length} messages`);
 
       // Transform SDK messages to UI format
       const transformedMessages = sdkMessages
