@@ -11,6 +11,7 @@ import MDContent from "../render/markdown";
 import { AgentMemoryPanel } from "./AgentMemoryPanel";
 import ConnectionModeIndicator, { ConnectionMode } from "./ConnectionModeIndicator";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { useAgentNickname } from "../hooks/useAgentNickname";
 
 const SCROLL_THRESHOLD = 50;
 
@@ -67,6 +68,9 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
   const [deleting, setDeleting] = useState(false);
   const [convDeleteId, setConvDeleteId] = useState<string | null>(null);
   const [convDeleting, setConvDeleting] = useState(false);
+
+  // Per-agent UI nickname (localStorage-backed; does not modify the server agent)
+  const { nickname, setNickname } = useAgentNickname(agentId);
 
   // Config form fields
   const [cfgName, setCfgName] = useState('');
@@ -898,6 +902,12 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
                     <ConfigField label="Name" value={cfgName} onChange={setCfgName} />
                     <ConfigField label="Description" value={cfgDesc} onChange={setCfgDesc} />
                     <ConfigField label="Tags" value={cfgTags} onChange={setCfgTags} hint="Comma-separated" />
+                    <ConfigField
+                      label="Chat nickname"
+                      value={nickname}
+                      onChange={setNickname}
+                      hint="UI-only alias for this agent in chat; saved instantly (local to this browser)"
+                    />
                   </div>
 
                   <div className="space-y-3">
@@ -1146,14 +1156,14 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
                       isRunning={isRunning}
                       permissionRequest={permissionRequests[0]}
                       onPermissionResult={() => {}}
-                      assistantName={agent.name || 'Assistant'}
+                      assistantName={nickname || agent.name || 'Assistant'}
                     />
                   ))
                 )}
 
                 {partialMessage && (
                   <div className="partial-message mt-4">
-                    <div className="header text-accent">{agent.name || 'Assistant'}</div>
+                    <div className="header text-accent">{nickname || agent.name || 'Assistant'}</div>
                     <MDContent text={partialMessage} />
                   </div>
                 )}
