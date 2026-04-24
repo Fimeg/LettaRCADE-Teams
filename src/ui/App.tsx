@@ -3,6 +3,7 @@ import { useAppStore, type TopTab } from "./store/useAppStore";
 import type { ClientEvent } from "./types";
 import { AgentsBrowser } from "./components/AgentsBrowser";
 import { AgentWorkspace } from "./components/AgentWorkspace";
+import { SettingsPanel } from "./components/SettingsPanel";
 import { StartSessionModal } from "./components/StartSessionModal";
 import { useIPC } from "./hooks/useIPC";
 
@@ -110,12 +111,7 @@ function App() {
           </div>
         );
       case 'settings':
-        return (
-          <div className="flex flex-col items-center justify-center h-full text-ink-600">
-            <div className="text-lg font-medium">Settings</div>
-            <p className="text-sm mt-2">Global settings coming soon</p>
-          </div>
-        );
+        return <SettingsPanel />;
       default:
         return null;
     }
@@ -128,7 +124,7 @@ function App() {
         <div className="flex items-center gap-6">
           <div className="flex items-center gap-2">
             <div className={`w-2 h-2 rounded-full ${serverConnected === true ? 'bg-green-500' : serverConnected === false ? 'bg-red-500' : 'bg-amber-500'}`} />
-            <span className="text-sm font-semibold text-ink-900">Letta ADE</span>
+            <span className="text-sm font-semibold text-ink-900">Letta Community ADE</span>
           </div>
           <nav className="flex items-center">
             <TabButton
