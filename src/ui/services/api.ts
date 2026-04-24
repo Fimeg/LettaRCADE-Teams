@@ -376,6 +376,12 @@ export const conversationsApi = {
     const client = getLettaClient();
     return await client.conversations.create({ agent_id: agentId });
   },
+
+  /** Delete a conversation */
+  deleteConversation: async (conversationId: string): Promise<void> => {
+    const client = getLettaClient();
+    await client.conversations.delete(conversationId);
+  },
 };
 
 // =============================================================================

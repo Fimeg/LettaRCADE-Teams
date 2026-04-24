@@ -156,6 +156,7 @@ interface AppState {
   toggleTool: (agentId: string, toolId: string, nextEnabled: boolean) => Promise<void>;
   updateAgent: (id: string, updates: Record<string, unknown>) => Promise<void>;
   createConversation: (agentId: string) => Promise<ApiConversation | null>;
+  deleteConversation: (conversationId: string) => Promise<boolean>;
   updateMemoryBlock: (agentId: string, blockLabel: string, newValue: string) => Promise<void>;
   updateMemoryBlocks: (agentId: string, blocks: MemoryBlock[]) => void;
   markHistoryRequested: (sessionId: string) => void;
@@ -428,6 +429,28 @@ export const useAppStore = create<AppState>((set, get) => ({
       console.error('[useAppStore] Failed to create conversation:', err);
       set({ globalError: err instanceof Error ? err.message : 'Failed to create conversation' });
       return null;
+    }
+  },
+
+  deleteConversation: async (conversationId) => {
+    try {
+      await conversationsApi.deleteConversation(conversationId);
+      // Refresh current agent to get updated conversations list
+      const agentId = get().selectedAgentId;
+      if (agentId) {
+        await get().loadAgent(agentId);
+      }
+      // Clear active conversation if it was deleted
+      if (get().activeConversationId === conversationId) {
+        const agent = agentId ? get().agents[agentId] : null;
+        const nextConv = agent?.conversations[0];
+        get().setActiveConversationId(nextConv?.id ?? null);
+      }
+      return true;
+    } catch (err) {
+      console.error('[useAppStore] Failed to delete conversation:', err);
+      set({ globalError: err instanceof Error ? err.message : 'Failed to delete conversation' });
+      return false;
     }
   },
 
