@@ -1,6 +1,18 @@
 import { create } from 'zustand';
-import { agentsApi } from '../services/api';
+import { agentsApi, chatApi } from '../services/api';
+import type { Conversation as ApiConversation } from '../services/api';
 import type { ServerEvent, SessionStatus, StreamMessage } from "../types";
+
+export type TopTab = 'agents' | 'models' | 'settings';
+
+export interface AgentSummary {
+  id: string;
+  name: string;
+  description?: string | null;
+  model?: string | null;
+  toolCount?: number;
+  createdAt?: string | null;
+}
 
 export type PermissionRequest = {
   toolUseId: string;
@@ -83,11 +95,16 @@ export interface ToolAttachment {
 export interface Agent {
   id: string;
   name: string;
+  description?: string;
   model: string;
   systemMessage?: string;
   temperature?: number;
   memoryBlocks: MemoryBlock[];
   tools: ToolAttachment[];
+  conversations: ApiConversation[];
+  /** Raw agent object from the server — LLM config, tags, context window, etc. */
+  raw?: Record<string, unknown>;
+  loaded: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -97,6 +114,12 @@ interface AppState {
   activeSessionId: string | null;
   selectedAgentId: string | null;
   agents: Record<string, Agent>;
+  agentList: AgentSummary[];
+  agentsLoading: boolean;
+  agentsError: string | null;
+  activeTab: TopTab;
+  serverConnected: boolean | null;
+  activeConversationId: string | null;
   prompt: string;
   cwd: string;
   pendingStart: boolean;
@@ -112,6 +135,13 @@ interface AppState {
   setShowStartModal: (show: boolean) => void;
   setActiveSessionId: (id: string | null) => void;
   setSelectedAgentId: (id: string | null) => void;
+  setActiveTab: (tab: TopTab) => void;
+  setServerConnected: (connected: boolean | null) => void;
+  setActiveConversationId: (id: string | null) => void;
+  loadAgentList: () => Promise<void>;
+  loadAgent: (id: string) => Promise<void>;
+  deleteAgent: (id: string) => Promise<void>;
+  toggleTool: (agentId: string, toolId: string, nextEnabled: boolean) => Promise<void>;
   updateAgent: (agent: Agent) => void;
   updateMemoryBlock: (agentId: string, blockLabel: string, newValue: string) => Promise<void>;
   updateMemoryBlocks: (agentId: string, blocks: MemoryBlock[]) => void;
@@ -161,6 +191,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeSessionId: null,
   selectedAgentId: null,
   agents: {},
+  agentList: [],
+  agentsLoading: false,
+  agentsError: null,
+  activeTab: 'agents',
+  serverConnected: null,
+  activeConversationId: null,
   prompt: "",
   cwd: "",
   pendingStart: false,
@@ -175,7 +211,157 @@ export const useAppStore = create<AppState>((set, get) => ({
   setGlobalError: (globalError) => set({ globalError }),
   setShowStartModal: (showStartModal) => set({ showStartModal }),
   setActiveSessionId: (id) => set({ activeSessionId: id }),
-  setSelectedAgentId: (id) => set({ selectedAgentId: id }),
+  setSelectedAgentId: (id) => set({ selectedAgentId: id, activeConversationId: null }),
+  setActiveTab: (activeTab) => set({ activeTab }),
+  setServerConnected: (serverConnected) => set({ serverConnected }),
+  setActiveConversationId: (activeConversationId) => set({ activeConversationId }),
+
+  loadAgentList: async () => {
+    set({ agentsLoading: true, agentsError: null });
+    try {
+      const list = await agentsApi.listAgents();
+      const summaries: AgentSummary[] = list.map((a) => ({
+        id: a.id,
+        name: a.name,
+        description: a.description ?? null,
+        model: a.model ?? null,
+        // @ts-expect-error — community-ade returns toolCount but base Agent type doesn't declare it
+        toolCount: typeof a.toolCount === 'number' ? a.toolCount : undefined,
+        createdAt: a.created_at ?? null,
+      }));
+      set({ agentList: summaries, agentsLoading: false });
+    } catch (err) {
+      set({
+        agentsLoading: false,
+        agentsError: err instanceof Error ? err.message : 'Failed to load agents',
+      });
+    }
+  },
+
+  loadAgent: async (id) => {
+    try {
+      const detail = await agentsApi.getAgent(id);
+      const raw = (detail.raw ?? {}) as Record<string, unknown>;
+      const llm = (raw.llm_config as Record<string, unknown> | undefined) ?? {};
+
+      const memoryBlocks: MemoryBlock[] = detail.blocks.map((b) => ({
+        id: b.id ?? b.label,
+        label: b.label,
+        value: extractBlockText(
+          // API returns either { value } or { content }
+          (b as { content?: unknown }).content ?? b.value,
+        ),
+        limit: b.limit,
+      }));
+
+      // Attached tool IDs come back in raw.tools as either strings or {id} objects; enabled = attached.
+      const rawTools = (raw.tools as unknown[] | undefined) ?? [];
+      const attachedIds = new Set<string>(
+        rawTools
+          .map((t) => (typeof t === 'string' ? t : typeof t === 'object' && t !== null && 'id' in t ? String((t as { id: unknown }).id) : null))
+          .filter((v): v is string => !!v),
+      );
+
+      const tools: ToolAttachment[] = detail.tools.map((t) => ({
+        id: t.id,
+        name: t.name,
+        description: t.description,
+        enabled: attachedIds.size === 0 ? true : attachedIds.has(t.id),
+      }));
+
+      const nowCreated = (raw.created_at as string | undefined) ? Date.parse(raw.created_at as string) : Date.now();
+      const nowUpdated = (raw.updated_at as string | undefined) ? Date.parse(raw.updated_at as string) : Date.now();
+
+      const agent: Agent = {
+        id,
+        name: String(raw.name ?? ''),
+        description: raw.description as string | undefined,
+        model: String(raw.model ?? (llm.handle as string | undefined) ?? (llm.model as string | undefined) ?? ''),
+        systemMessage: (raw.system as string | undefined) ?? '',
+        temperature: llm.temperature as number | undefined,
+        memoryBlocks,
+        tools,
+        conversations: detail.conversations ?? [],
+        raw,
+        loaded: true,
+        createdAt: nowCreated,
+        updatedAt: nowUpdated,
+      };
+
+      set((state) => ({
+        agents: { ...state.agents, [id]: agent },
+      }));
+
+      // Auto-select first conversation if none active
+      const state = get();
+      if (!state.activeConversationId && agent.conversations.length > 0) {
+        set({ activeConversationId: agent.conversations[0].id });
+      }
+    } catch (err) {
+      console.error('[useAppStore] Failed to load agent:', err);
+      set({ globalError: err instanceof Error ? err.message : 'Failed to load agent' });
+    }
+  },
+
+  deleteAgent: async (id) => {
+    try {
+      await agentsApi.deleteAgent(id);
+      set((state) => {
+        const nextAgents = { ...state.agents };
+        delete nextAgents[id];
+        return {
+          agents: nextAgents,
+          agentList: state.agentList.filter((a) => a.id !== id),
+          selectedAgentId: state.selectedAgentId === id ? null : state.selectedAgentId,
+          activeConversationId: state.selectedAgentId === id ? null : state.activeConversationId,
+        };
+      });
+    } catch (err) {
+      set({ globalError: err instanceof Error ? err.message : 'Failed to delete agent' });
+    }
+  },
+
+  toggleTool: async (agentId, toolId, nextEnabled) => {
+    // Optimistic update
+    set((state) => {
+      const agent = state.agents[agentId];
+      if (!agent) return {};
+      return {
+        agents: {
+          ...state.agents,
+          [agentId]: {
+            ...agent,
+            tools: agent.tools.map((t) => (t.id === toolId ? { ...t, enabled: nextEnabled } : t)),
+          },
+        },
+      };
+    });
+    try {
+      if (nextEnabled) {
+        await agentsApi.attachTool(agentId, toolId);
+      } else {
+        await agentsApi.detachTool(agentId, toolId);
+      }
+    } catch (err) {
+      console.error('[useAppStore] Failed to toggle tool:', err);
+      // Revert
+      set((state) => {
+        const agent = state.agents[agentId];
+        if (!agent) return {};
+        return {
+          agents: {
+            ...state.agents,
+            [agentId]: {
+              ...agent,
+              tools: agent.tools.map((t) => (t.id === toolId ? { ...t, enabled: !nextEnabled } : t)),
+            },
+          },
+          globalError: err instanceof Error ? err.message : 'Failed to toggle tool',
+        };
+      });
+    }
+  },
+
   updateAgent: (agent) => set((state) => ({
     agents: { ...state.agents, [agent.id]: agent }
   })),
