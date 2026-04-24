@@ -139,6 +139,8 @@ interface AppState {
   sessionsLoaded: boolean;
   showStartModal: boolean;
   historyRequested: Set<string>;
+  /** AbortController for in-flight message requests - used to cancel when switching conversations */
+  messagesAbortController: AbortController | null;
 
   setPrompt: (prompt: string) => void;
   setCwd: (cwd: string) => void;
@@ -162,6 +164,12 @@ interface AppState {
   markHistoryRequested: (sessionId: string) => void;
   resolvePermissionRequest: (sessionId: string, toolUseId: string) => void;
   handleServerEvent: (event: ServerEvent) => void;
+  /** Load messages from API into a session's state (single source of truth) */
+  getMessages: (conversationId: string, sessionId: string) => Promise<void>;
+  /** Clear messages for a session */
+  clearMessages: (sessionId: string) => void;
+  /** Abort any in-flight message requests (call when switching conversations) */
+  abortMessageRequests: () => void;
 }
 
 /**
@@ -219,6 +227,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   sessionsLoaded: false,
   showStartModal: false,
   historyRequested: new Set(),
+  messagesAbortController: null,
 
   setPrompt: (prompt) => set({ prompt }),
   setCwd: (cwd) => set({ cwd }),
@@ -747,5 +756,132 @@ export const useAppStore = create<AppState>((set, get) => ({
         break;
       }
     }
-  }
+  },
+
+  // ============================================================================
+  // Message State Management (Single Source of Truth in sessions)
+  // ============================================================================
+
+  /**
+   * Load messages from API into a session's state.
+   * This consolidates message state - sessions are the single source of truth.
+   * AbortController prevents race conditions when switching conversations.
+   */
+  getMessages: async (conversationId: string, sessionId: string) => {
+    // Abort any existing request to prevent race conditions
+    const existingController = get().messagesAbortController;
+    if (existingController) {
+      existingController.abort();
+    }
+
+    // Create new AbortController for this request
+    const abortController = new AbortController();
+    set({ messagesAbortController: abortController });
+
+    try {
+      const client = (await import('../services/api')).getLettaClient();
+      const page = await client.conversations.messages.list(conversationId, {
+        limit: 200,
+        order: "asc",
+      });
+      const apiMessages = page.getPaginatedItems();
+
+      // Transform API messages to StreamMessage format
+      const streamMessages: StreamMessage[] = apiMessages.map((msg): StreamMessage => {
+        const msgWithProps = msg as {
+          id?: string;
+          content?: unknown;
+          role?: string;
+          created_at?: string | number;
+        };
+
+        let content = '';
+        if (typeof msgWithProps.content === 'string') {
+          content = msgWithProps.content;
+        } else if (msgWithProps.content && typeof msgWithProps.content === 'object') {
+          const contentObj = msgWithProps.content as { text?: string; [key: string]: unknown };
+          if ('text' in contentObj && typeof contentObj.text === 'string') {
+            content = contentObj.text;
+          } else if (Array.isArray(msgWithProps.content)) {
+            interface ContentBlock {
+              type?: string;
+              text?: string;
+            }
+            content = msgWithProps.content
+              .filter((c: ContentBlock) => c.type === 'text' || typeof c.text === 'string')
+              .map((c: ContentBlock) => c.text || '')
+              .join('');
+          }
+        }
+
+        const baseMessage = {
+          uuid: msgWithProps.id || `msg-${Date.now()}`,
+          createdAt: msgWithProps.created_at ? new Date(msgWithProps.created_at).getTime() : Date.now(),
+        };
+
+        if (msgWithProps.role === 'user') {
+          return { ...baseMessage, type: 'user_prompt' as const, prompt: content };
+        } else if (msgWithProps.role === 'assistant') {
+          return { ...baseMessage, type: 'assistant' as const, content };
+        } else if (msgWithProps.role === 'system') {
+          return { ...baseMessage, type: 'system' as const, content };
+        } else {
+          return { ...baseMessage, type: 'assistant' as const, content };
+        }
+      });
+
+      // Update session with loaded messages (single source of truth)
+      set((state) => {
+        const existing = state.sessions[sessionId] ?? createSession(sessionId);
+        return {
+          sessions: {
+            ...state.sessions,
+            [sessionId]: { ...existing, messages: streamMessages, hydrated: true }
+          }
+        };
+      });
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') {
+        // Request was aborted - this is expected when switching conversations
+        return;
+      }
+      console.error('[useAppStore] Failed to load messages:', err);
+      set({ globalError: err instanceof Error ? err.message : 'Failed to load messages' });
+    } finally {
+      // Clear the abort controller if it's still ours
+      const currentController = get().messagesAbortController;
+      if (currentController === abortController) {
+        set({ messagesAbortController: null });
+      }
+    }
+  },
+
+  /**
+   * Clear messages for a session.
+   * Use this when switching conversations or resetting state.
+   */
+  clearMessages: (sessionId: string) => {
+    set((state) => {
+      const existing = state.sessions[sessionId];
+      if (!existing) return {};
+      return {
+        sessions: {
+          ...state.sessions,
+          [sessionId]: { ...existing, messages: [], hydrated: false }
+        }
+      };
+    });
+  },
+
+  /**
+   * Abort any in-flight message requests.
+   * Call this when switching conversations to prevent stale data.
+   */
+  abortMessageRequests: () => {
+    const controller = get().messagesAbortController;
+    if (controller) {
+      controller.abort();
+      set({ messagesAbortController: null });
+    }
+  },
 }));
