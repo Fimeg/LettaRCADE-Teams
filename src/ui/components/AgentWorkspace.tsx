@@ -592,7 +592,35 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
   // ═══ MESSAGE SENDING WITH STREAMING ═══
 
   const handleInputSend = useCallback(async () => {
-    if (!inputValue.trim() || !activeConversationId || isStreaming) return;
+    if (!inputValue.trim() || isStreaming) return;
+
+    // Auto-create conversation if none exists
+    let conversationId = activeConversationId;
+    if (!conversationId) {
+      try {
+        const newConv = await createConversation(agentId);
+        if (newConv) {
+          conversationId = newConv.id;
+          setActiveConversationId(newConv.id);
+        } else {
+          setMessages(prev => [...prev, {
+            uuid: `error-${Date.now()}`,
+            createdAt: Date.now(),
+            type: 'system' as const,
+            content: 'Failed to create conversation. Please try again.',
+          }]);
+          return;
+        }
+      } catch (err) {
+        setMessages(prev => [...prev, {
+          uuid: `error-${Date.now()}`,
+          createdAt: Date.now(),
+          type: 'system' as const,
+          content: `Error creating conversation: ${err instanceof Error ? err.message : 'Unknown error'}`,
+        }]);
+        return;
+      }
+    }
 
     const userMsg = inputValue.trim();
     setInputValue('');
@@ -646,12 +674,16 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
             break;
           case 'tool_call':
             setMessages(prev => [...prev, {
+              uuid: `toolcall-${Date.now()}`,
+              createdAt: Date.now(),
               type: 'system' as const,
               content: `Tool call: ${chunk.name}(${JSON.stringify(chunk.arguments)})`,
             }]);
             break;
           case 'tool_return':
             setMessages(prev => [...prev, {
+              uuid: `toolret-${Date.now()}`,
+              createdAt: Date.now(),
               type: 'system' as const,
               content: `Tool result: ${chunk.output}`,
             }]);
@@ -689,7 +721,7 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
       partialMessageRef.current = '';
       setPartialMessage('');
     }
-  }, [inputValue, activeConversationId, isStreaming, handleSlashCommand, resetToLatest, shouldAutoScroll, agentId]);
+  }, [inputValue, activeConversationId, isStreaming, handleSlashCommand, resetToLatest, shouldAutoScroll, agentId, createConversation, setActiveConversationId]);
 
   const getModelDisplay = (model: string) => {
     if (!model) return "Unknown";
