@@ -10,6 +10,7 @@ import { MessageCard } from "./EventCard";
 import MDContent from "../render/markdown";
 import { AgentMemoryPanel } from "./AgentMemoryPanel";
 import ConnectionModeIndicator, { ConnectionMode } from "./ConnectionModeIndicator";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 const SCROLL_THRESHOLD = 50;
 
@@ -53,6 +54,7 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
   const setActiveConversationId = useAppStore((s) => s.setActiveConversationId);
   const createConversation = useAppStore((s) => s.createConversation);
   const deleteAgent = useAppStore((s) => s.deleteAgent);
+  const deleteConversation = useAppStore((s) => s.deleteConversation);
   const handleServerEvent = useAppStore((s) => s.handleServerEvent);
 
   // Settings panel state
@@ -63,6 +65,8 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
   const [systemDraft, setSystemDraft] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [convDeleteId, setConvDeleteId] = useState<string | null>(null);
+  const [convDeleting, setConvDeleting] = useState(false);
 
   // Config form fields
   const [cfgName, setCfgName] = useState('');
@@ -451,10 +455,22 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
     setDeleting(true);
     try {
       await deleteAgent(agentId);
+      setShowDeleteConfirm(false);
       onBack();
     } catch (err) {
       setSaveMessage(`Delete failed: ${err instanceof Error ? err.message : 'Failed to delete'}`);
       setDeleting(false);
+    }
+  };
+
+  const handleDeleteConversation = async () => {
+    if (!convDeleteId) return;
+    setConvDeleting(true);
+    try {
+      await deleteConversation(convDeleteId);
+      setConvDeleteId(null);
+    } finally {
+      setConvDeleting(false);
     }
   };
 
@@ -787,17 +803,34 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
 
           {/* Conversation Selector */}
           {agent.conversations && agent.conversations.length > 0 && (
-            <select
-              value={activeConversationId || ""}
-              onChange={(e) => setActiveConversationId(e.target.value || null)}
-              className="px-3 py-1.5 text-sm bg-surface-cream border border-ink-900/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-accent/50"
-            >
-              {agent.conversations.map((conv) => (
-                <option key={conv.id} value={conv.id}>
-                  {`Conversation ${conv.id.slice(0, 8)}`}
-                </option>
-              ))}
-            </select>
+            <div className="flex items-center gap-1">
+              <select
+                value={activeConversationId || ""}
+                onChange={(e) => setActiveConversationId(e.target.value || null)}
+                className="px-3 py-1.5 text-sm bg-surface-cream border border-ink-900/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-accent/50"
+              >
+                {agent.conversations.map((conv) => (
+                  <option key={conv.id} value={conv.id}>
+                    {`Conversation ${conv.id.slice(0, 8)}`}
+                  </option>
+                ))}
+              </select>
+              {activeConversationId && (
+                <button
+                  onClick={() => setConvDeleteId(activeConversationId)}
+                  title="Delete this conversation"
+                  aria-label="Delete this conversation"
+                  className="p-1.5 rounded-lg text-ink-500 hover:text-red-600 hover:bg-red-50 transition-colors"
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="3 6 5 6 21 6" />
+                    <path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6" />
+                    <path d="M10 11v6" />
+                    <path d="M14 11v6" />
+                  </svg>
+                </button>
+              )}
+            </div>
           )}
 
           <button
@@ -1042,33 +1075,12 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
 
             {/* Delete Agent */}
             <div className="p-4 border-t border-ink-900/10">
-              {showDeleteConfirm ? (
-                <div className="space-y-2">
-                  <span className="text-xs text-red-600 font-medium">Delete this agent?</span>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={handleDeleteAgent}
-                      disabled={deleting}
-                      className="flex-1 px-3 py-2 text-xs font-medium rounded-lg bg-red-500 text-white hover:bg-red-600 transition-colors disabled:opacity-50"
-                    >
-                      {deleting ? 'Deleting...' : 'Yes, Delete'}
-                    </button>
-                    <button
-                      onClick={() => setShowDeleteConfirm(false)}
-                      className="px-3 py-2 text-xs font-medium rounded-lg bg-surface-tertiary text-ink-600 hover:bg-ink-900/10 transition-colors"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <button
-                  onClick={() => setShowDeleteConfirm(true)}
-                  className="w-full px-3 py-2 text-xs font-medium rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors"
-                >
-                  Delete Agent
-                </button>
-              )}
+              <button
+                onClick={() => setShowDeleteConfirm(true)}
+                className="w-full px-3 py-2 text-xs font-medium rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors"
+              >
+                Delete Agent
+              </button>
             </div>
           </div>
         </Panel>
@@ -1241,6 +1253,33 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
           <AgentMemoryPanel agentId={agentId} />
         </Panel>
       </PanelGroup>
+
+      <ConfirmDialog
+        open={showDeleteConfirm}
+        variant="danger"
+        title="Delete agent"
+        message={`This will permanently delete "${agent.name}" along with all its conversations, memory blocks, and attached tools. This cannot be undone.`}
+        requireTyped={agent.name}
+        confirmLabel="Delete agent"
+        busy={deleting}
+        onConfirm={handleDeleteAgent}
+        onCancel={() => !deleting && setShowDeleteConfirm(false)}
+      />
+
+      <ConfirmDialog
+        open={convDeleteId !== null}
+        variant="danger"
+        title="Delete conversation"
+        message={
+          convDeleteId
+            ? `Delete conversation ${convDeleteId.slice(0, 8)}? All messages in this conversation will be permanently lost. The agent and its memory are not affected.`
+            : ''
+        }
+        confirmLabel="Delete conversation"
+        busy={convDeleting}
+        onConfirm={handleDeleteConversation}
+        onCancel={() => !convDeleting && setConvDeleteId(null)}
+      />
     </div>
   );
 }

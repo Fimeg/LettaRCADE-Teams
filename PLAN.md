@@ -10,7 +10,7 @@ Architecture reference lives in `CLAUDE.md` (do not duplicate here).
 
 | Subsystem | Status | Notes |
 |---|---|---|
-| Conversations | 🟡 basic | History loads (fixed 2026-04-24); create on first send works; delete UI not built |
+| Conversations | 🟡 basic | History loads (fixed 2026-04-24); create on first send; delete UI w/ confirm (2026-04-24) |
 | Messaging / streaming | 🟢 working | Native `client.agents.messages.stream`; tool/reasoning messages render |
 | Memory | 🟢 working | Curator health, sacred blocks, archival CRUD; visuals are basic bars |
 | Agents | 🟡 partial | List / detail / edit / delete work; **creation wizard scaffolded but not integrated** |
@@ -25,7 +25,9 @@ Architecture reference lives in `CLAUDE.md` (do not duplicate here).
 
 | Gitea # | Title | Status | Next concrete step |
 |---|---|---|---|
-| — | Conversation delete UI | store+API done | Add trash button + confirm modal in AgentWorkspace conv dropdown |
+| — | Back button navigation | 🐞 two systems, one broken | Audit `onBack` callers + any history-stack logic; consolidate to one |
+| — | Full agent settings panel | 🟡 most fields exist in AgentWorkspace | Add missing: Tags, Endpoint (custom URL), Generation, Endpoint Type; Info read-only block (Agent ID, Created, Last Run, Ctx Window, Endpoint Type). See "Settings schema" below. |
+| — | Memory block management — memfs vs traditional | ⛔ not started | Detect agent memfs-compat from agent config; branch editor UI (memfs file-tree vs traditional block list) |
 | — | Memory pressure gauge | `MemoryPressureBar.tsx` (43 lines, linear) | Circular SVG gauge + token-count estimate beside it |
 | — | Server-setup wizard modal | subagent output saved (`a791e0752cac1fe22`) | Implement from that output |
 | — | Provider config panel | subagent output (unverified) | Audit output; may need re-spec |
@@ -39,8 +41,21 @@ Architecture reference lives in `CLAUDE.md` (do not duplicate here).
 |---|---|---|---|
 | **#3** | Agent Teleport (deploy to channel) | needs #1 + community-ade E | `DeployModal.tsx` scaffolded |
 | **#4** | Electron App Overhaul | needs #1 | CSP, IPC validation, config dir, SQLite session store, auto-update, signing |
+| — | `/wrapup` for stale conversations | new idea | For convs idle ≥ 2 weeks, offer user a reflection pass: summarize, extract durable facts into memory blocks/archival, then optionally close. Needs: staleness detector, reflection prompt, targeted memory writes, user-approval step. |
 
 Stream-level epics from the old `MASTER_TRACKING.md` (`#1` SDK migration, `#2` 3-pane UI, `#5` community-ade integration) don't appear in current open Gitea. Needs verification — they may have been closed or never created.
+
+---
+
+## Settings schema (target for agent settings panel)
+
+**Identity** — Name, Description, Tags (comma-separated)
+**Inference** — Model (`provider/model-name`), Endpoint (custom API URL), Embedding, Generation, Context Window, Max Tokens, Freq. Penalty (-2.0 to 2.0), Parallel Tools
+**Reasoning** — Reasoner, Max Reasoning Tokens, Effort
+**Behavior** — Sleeptime, Autoclear Buffer
+**Info (read-only)** — Agent ID, Created, Last Run, Ctx Window (model), Endpoint Type
+
+Current `AgentWorkspace` Config tab covers most of the editable fields. Missing: Tags, Endpoint URL, separate Generation field, Endpoint Type (read-only), the Info block.
 
 ---
 
