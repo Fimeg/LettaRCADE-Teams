@@ -78,10 +78,21 @@ export type SessionView = {
 };
 
 // Agent-related types
+/**
+ * Memory block representation for SDK 0.1.14+.
+ * Supports both legacy `value` field and new `content` field.
+ *
+ * SDK 0.1.14 changed memory blocks from:
+ * - Old: { value: string }
+ * - New: { content: string | { text: string } }
+ */
 export interface MemoryBlock {
   id: string;
   label: string;
-  value: string;
+  /** Legacy field - SDK <0.1.14 used `value` */
+  value?: string;
+  /** New field - SDK 0.1.14+ uses `content` */
+  content?: string | { text?: string };
   limit?: number;
 }
 
@@ -244,15 +255,20 @@ export const useAppStore = create<AppState>((set, get) => ({
       const raw = (detail.raw ?? {}) as Record<string, unknown>;
       const llm = (raw.llm_config as Record<string, unknown> | undefined) ?? {};
 
-      const memoryBlocks: MemoryBlock[] = detail.blocks.map((b) => ({
-        id: b.id ?? b.label,
-        label: b.label,
-        value: extractBlockText(
-          // API returns either { value } or { content }
+      const memoryBlocks: MemoryBlock[] = detail.blocks.map((b) => {
+        // Extract text from either new `content` field or legacy `value` field
+        const extractedText = extractBlockText(
           (b as { content?: unknown }).content ?? b.value,
-        ),
-        limit: b.limit,
-      }));
+        );
+        return {
+          id: b.id ?? b.label,
+          label: b.label,
+          // Set both fields for backwards compatibility
+          value: extractedText,  // Legacy field
+          content: { text: extractedText },  // SDK 0.1.14+ format
+          limit: b.limit,
+        };
+      });
 
       // Attached tool IDs come back in raw.tools as either strings or {id} objects; enabled = attached.
       const rawTools = (raw.tools as unknown[] | undefined) ?? [];
@@ -373,7 +389,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!agent) return {};
 
       const updatedBlocks = agent.memoryBlocks.map(block =>
-        block.label === blockLabel ? { ...block, value: newValue } : block
+        block.label === blockLabel
+          ? { ...block, value: newValue, content: { text: newValue } }  // Update both fields
+          : block
       );
 
       return {
@@ -385,6 +403,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
 
     // Sync to API (community-ade uses label as identifier)
+    // API expects `value` field (legacy format)
     try {
       await agentsApi.updateMemoryBlock(agentId, blockLabel, newValue);
     } catch (error) {
