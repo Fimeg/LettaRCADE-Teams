@@ -127,13 +127,13 @@ const ToolResultCard = ({ message }: { message: SDKToolResultMessage }) => {
 };
 
 // Assistant Message Card
-const AssistantCard = ({ message, showIndicator = false }: { message: SDKAssistantMessage; showIndicator?: boolean }) => {
+const AssistantCard = ({ message, showIndicator = false, assistantName = "Assistant" }: { message: SDKAssistantMessage; showIndicator?: boolean; assistantName?: string }) => {
   const contentText = extractBlockText(message.content);
   return (
     <div className="flex flex-col mt-4">
       <div className="header text-accent flex items-center gap-2">
         <StatusDot variant="success" isActive={showIndicator} isVisible={showIndicator} />
-        Assistant
+        {assistantName}
       </div>
       <MDContent text={contentText} />
     </div>
@@ -273,13 +273,15 @@ export function MessageCard({
   isLast = false,
   isRunning = false,
   permissionRequest,
-  onPermissionResult
+  onPermissionResult,
+  assistantName
 }: {
   message: StreamMessage;
   isLast?: boolean;
   isRunning?: boolean;
   permissionRequest?: PermissionRequest;
   onPermissionResult?: (toolUseId: string, result: CanUseToolResponse) => void;
+  assistantName?: string;
 }) {
   const showIndicator = isLast && isRunning;
 
@@ -296,7 +298,7 @@ export function MessageCard({
       return <InitCard message={sdkMessage} showIndicator={showIndicator} />;
     
     case "assistant":
-      return <AssistantCard message={sdkMessage} showIndicator={showIndicator} />;
+      return <AssistantCard message={sdkMessage} showIndicator={showIndicator} assistantName={assistantName} />;
     
     case "reasoning":
       return <ReasoningCard message={sdkMessage} showIndicator={showIndicator} />;
