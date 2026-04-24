@@ -9,7 +9,7 @@ export function getApiBase(): string {
     const saved = localStorage.getItem('letta_api_url');
     if (saved) return saved;
   }
-  return import.meta.env.VITE_API_URL || 'http://localhost:3000';
+  return import.meta.env.VITE_API_URL || 'http://localhost:8283';
 }
 
 // Dynamic API base getter - use this for all API calls
