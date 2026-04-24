@@ -268,7 +268,15 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   loadAgent: async (id) => {
     try {
-      const detail = await agentsApi.getAgent(id);
+      // Fetch agent detail and conversations in parallel — the SDK's agents.get()
+      // does not return nested conversations, so list them separately.
+      const [detail, conversations] = await Promise.all([
+        agentsApi.getAgent(id),
+        conversationsApi.listConversations(id).catch((err) => {
+          console.error('[useAppStore] Failed to list conversations:', err);
+          return [] as ApiConversation[];
+        }),
+      ]);
       // FIX: Use type assertion for 'raw' access since SDK AgentState may have runtime properties
       const raw = ((detail as unknown as { raw?: Record<string, unknown> }).raw) ?? {};
       const llm = (raw.llm_config as Record<string, unknown> | undefined) ?? {};
@@ -317,8 +325,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         temperature: llm.temperature as number | undefined,
         memoryBlocks,
         tools,
-        // FIX: Use type assertion for conversations access
-        conversations: ((detail as unknown as { conversations?: ApiConversation[] }).conversations) ?? [],
+        conversations,
         raw,
         loaded: true,
         createdAt: nowCreated,
