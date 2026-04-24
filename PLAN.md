@@ -10,8 +10,8 @@ Architecture reference lives in `CLAUDE.md` (do not duplicate here).
 
 | Subsystem | Status | Notes |
 |---|---|---|
-| Conversations | 🟡 basic | History loads (fixed 2026-04-24); create on first send; delete UI w/ confirm (2026-04-24) |
-| Messaging / streaming | 🟢 working | Native `client.agents.messages.stream`; tool/reasoning messages render |
+| Conversations | 🟡 basic | History loads (fixed 2026-04-24); create on first send; delete UI w/ confirm (2026-04-24); scoped per-conversation (fixed 2026-04-24) |
+| Messaging / streaming | 🟢 working | `client.conversations.messages.create` w/ streaming (fixed 2026-04-24 — was using agent-scoped endpoint → no replies, history bleed); tool/reasoning messages render |
 | Memory | 🟢 working | Curator health, sacred blocks, archival CRUD; visuals are basic bars |
 | Agents | 🟡 partial | List / detail / edit / delete work; **creation wizard scaffolded but not integrated** |
 | Slash commands | 🟢 working | `/doctor /clear /remember /recompile` via native client |
@@ -26,6 +26,7 @@ Architecture reference lives in `CLAUDE.md` (do not duplicate here).
 | Gitea # | Title | Status | Next concrete step |
 |---|---|---|---|
 | — | Back button navigation | 🐞 two systems, one broken | Audit `onBack` callers + any history-stack logic; consolidate to one |
+| — | Assistant display name + nickname | 🟡 shows agent name (2026-04-24) | Add per-agent nickname field (localStorage or agent tag); settings UI to edit; fallback: agent.name → "Assistant" |
 | — | Full agent settings panel | 🟡 most fields exist in AgentWorkspace | Add missing: Tags, Endpoint (custom URL), Generation, Endpoint Type; Info read-only block (Agent ID, Created, Last Run, Ctx Window, Endpoint Type). See "Settings schema" below. |
 | — | Memory block management — memfs vs traditional | ⛔ not started | Detect agent memfs-compat from agent config; branch editor UI (memfs file-tree vs traditional block list) |
 | — | Memory pressure gauge | `MemoryPressureBar.tsx` (43 lines, linear) | Circular SVG gauge + token-count estimate beside it |

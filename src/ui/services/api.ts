@@ -274,10 +274,16 @@ export const chatApi = {
     });
   },
 
-  /** Stream agent responses */
+  /**
+   * Stream agent responses within a conversation.
+   * Uses `client.conversations.messages.create` — the conversation-scoped
+   * endpoint. Pass the conversation id; agent_id is only required for the
+   * magic "default" conversation.
+   */
   streamMessage: async function* (
-    agentId: string,
-    content: string
+    conversationId: string,
+    content: string,
+    opts: { agentId?: string } = {}
   ): AsyncGenerator<
     | { type: "reasoning"; reasoning: string }
     | { type: "assistant"; content: string }
@@ -290,10 +296,17 @@ export const chatApi = {
     unknown
   > {
     const client = getLettaClient();
-    const stream = await client.agents.messages.create(agentId, {
+    const body: Record<string, unknown> = {
       messages: [{ role: "user", content }],
       streaming: true,
-    });
+    };
+    if (conversationId === "default" && opts.agentId) {
+      body.agent_id = opts.agentId;
+    }
+    const stream = await client.conversations.messages.create(
+      conversationId,
+      body as unknown as Parameters<typeof client.conversations.messages.create>[1],
+    );
 
     for await (const chunk of stream) {
       const msg = chunk as Letta.Agents.Messages.LettaStreamingResponse;
@@ -349,14 +362,14 @@ export const chatApi = {
     }
   },
 
-  /** Get message history */
-  getMessages: async (agentId: string) => {
+  /** Get message history for a conversation (oldest → newest). */
+  getMessages: async (conversationId: string) => {
     const client = getLettaClient();
-    const messages: Letta.Agents.Messages.Message[] = [];
-    for await (const message of client.agents.messages.list(agentId)) {
-      messages.push(message);
-    }
-    return messages;
+    const page = await client.conversations.messages.list(conversationId, {
+      limit: 200,
+      order: "asc",
+    } as unknown as Parameters<typeof client.conversations.messages.list>[1]);
+    return page.getPaginatedItems();
   },
 };
 

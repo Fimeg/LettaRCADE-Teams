@@ -155,7 +155,7 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
       setIsLoadingMessages(true);
       setMessagesError(null);
       try {
-        const apiMessages = await chatApi.getMessages(agentId);
+        const apiMessages = await chatApi.getMessages(activeConversationId);
         const streamMessages: StreamMessage[] = apiMessages.map((msg): StreamMessage => {
           const msgWithProps = msg as {
             id?: string;
@@ -667,7 +667,7 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
     setPartialMessage('');
 
     try {
-      const stream = chatApi.streamMessage(agentId, userMsg);
+      const stream = chatApi.streamMessage(conversationId, userMsg, { agentId });
       let assistantContent = '';
 
       for await (const chunk of stream) {
@@ -1146,13 +1146,14 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
                       isRunning={isRunning}
                       permissionRequest={permissionRequests[0]}
                       onPermissionResult={() => {}}
+                      assistantName={agent.name || 'Assistant'}
                     />
                   ))
                 )}
 
                 {partialMessage && (
                   <div className="partial-message mt-4">
-                    <div className="header text-accent">Assistant</div>
+                    <div className="header text-accent">{agent.name || 'Assistant'}</div>
                     <MDContent text={partialMessage} />
                   </div>
                 )}
