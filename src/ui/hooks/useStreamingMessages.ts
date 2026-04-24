@@ -65,13 +65,18 @@ export function useStreamingMessages(
           body.conversation_id = conversationId;
         }
 
-        const response = await client.agents.messages.create(agentId, body);
-        // Handle different response formats - might be a stream or a single response
-        const stream = Array.isArray(response) ? response : [response];
+        console.log(`[useStreamingMessages] Calling client.agents.messages.create(${agentId}, streaming=true)`);
+        const stream = await client.agents.messages.create(agentId, body);
+        console.log(`[useStreamingMessages] Got stream, iterating chunks...`);
 
-        for (const chunk of stream) {
+        let chunkCount = 0;
+        for await (const chunk of stream) {
+          chunkCount++;
+          if (chunkCount === 1) console.log(`[useStreamingMessages] First chunk received`);
           const msg = chunk as LettaStreamingResponse;
           const messageType = (msg as unknown as { message_type: string }).message_type;
+
+          console.log(`[useStreamingMessages] Chunk ${chunkCount}: message_type=${messageType}`);
 
           switch (messageType) {
             case "assistant_message": {
