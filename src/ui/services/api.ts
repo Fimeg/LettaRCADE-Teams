@@ -1,9 +1,19 @@
 /**
- * API client for community-ade backend
+ * API client for Letta Community ADE
  * Replaces direct SDK calls with REST API calls
  */
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://10.10.20.19:3000';
+// Get API base URL from localStorage, env, or default
+export function getApiBase(): string {
+  if (typeof window !== 'undefined') {
+    const saved = localStorage.getItem('letta_api_url');
+    if (saved) return saved;
+  }
+  return import.meta.env.VITE_API_URL || 'http://10.10.20.19:8283';
+}
+
+// Dynamic API base getter - use this for all API calls
+const API_BASE = () => getApiBase();
 
 // Types matching community-ade response format
 export interface ApiResponse<T> {
@@ -64,7 +74,7 @@ async function handleResponse<T>(response: Response): Promise<T> {
 export const agentsApi = {
   /** List all agents */
   listAgents: async (): Promise<Agent[]> => {
-    const res = await fetch(`${API_BASE}/api/agents`);
+    const res = await fetch(`${API_BASE()}/api/agents`);
     const data = await handleResponse<ApiResponse<Agent[]>>(res);
     return data.data || [];
   },
@@ -76,7 +86,7 @@ export const agentsApi = {
     tools: Tool[];
     conversations: Conversation[];
   }> => {
-    const res = await fetch(`${API_BASE}/api/agents/${id}`);
+    const res = await fetch(`${API_BASE()}/api/agents/${id}`);
     const data = await handleResponse<ApiResponse<{
       raw: unknown;
       blocks: MemoryBlock[];
@@ -97,7 +107,7 @@ export const agentsApi = {
     context_window_limit?: number;
     tags?: string[];
   }): Promise<Agent> => {
-    const res = await fetch(`${API_BASE}/api/agents`, {
+    const res = await fetch(`${API_BASE()}/api/agents`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params),
@@ -109,7 +119,7 @@ export const agentsApi = {
 
   /** Update agent configuration */
   updateAgent: async (id: string, updates: Partial<Agent>): Promise<Agent> => {
-    const res = await fetch(`${API_BASE}/api/agents/${id}`, {
+    const res = await fetch(`${API_BASE()}/api/agents/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
@@ -121,7 +131,7 @@ export const agentsApi = {
 
   /** Delete an agent */
   deleteAgent: async (id: string): Promise<void> => {
-    const res = await fetch(`${API_BASE}/api/agents/${id}`, {
+    const res = await fetch(`${API_BASE()}/api/agents/${id}`, {
       method: 'DELETE',
     });
     await handleResponse<ApiResponse<void>>(res);
@@ -129,7 +139,7 @@ export const agentsApi = {
 
   /** Get memory blocks for an agent */
   getMemoryBlocks: async (agentId: string): Promise<MemoryBlock[]> => {
-    const res = await fetch(`${API_BASE}/api/agents/${agentId}/memory`);
+    const res = await fetch(`${API_BASE()}/api/agents/${agentId}/memory`);
     const data = await handleResponse<ApiResponse<MemoryBlock[]>>(res);
     return data.data || [];
   },
@@ -140,7 +150,7 @@ export const agentsApi = {
     label: string,
     value: string
   ): Promise<MemoryBlock> => {
-    const res = await fetch(`${API_BASE}/api/agents/${agentId}/memory/${label}`, {
+    const res = await fetch(`${API_BASE()}/api/agents/${agentId}/memory/${label}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ value }),
@@ -152,21 +162,21 @@ export const agentsApi = {
 
   /** Get tools available to an agent */
   getTools: async (agentId: string): Promise<Tool[]> => {
-    const res = await fetch(`${API_BASE}/api/agents/${agentId}/tools`);
+    const res = await fetch(`${API_BASE()}/api/agents/${agentId}/tools`);
     const data = await handleResponse<ApiResponse<Tool[]>>(res);
     return data.data || [];
   },
 
   /** List all available tools */
   listAllTools: async (): Promise<Tool[]> => {
-    const res = await fetch(`${API_BASE}/api/agents/tools`);
+    const res = await fetch(`${API_BASE()}/api/agents/tools`);
     const data = await handleResponse<ApiResponse<Tool[]>>(res);
     return data.data || [];
   },
 
   /** Attach tool to agent */
   attachTool: async (agentId: string, toolId: string): Promise<void> => {
-    const res = await fetch(`${API_BASE}/api/agents/${agentId}/tools/${toolId}/attach`, {
+    const res = await fetch(`${API_BASE()}/api/agents/${agentId}/tools/${toolId}/attach`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     });
@@ -175,7 +185,7 @@ export const agentsApi = {
 
   /** Detach tool from agent */
   detachTool: async (agentId: string, toolId: string): Promise<void> => {
-    const res = await fetch(`${API_BASE}/api/agents/${agentId}/tools/${toolId}/detach`, {
+    const res = await fetch(`${API_BASE()}/api/agents/${agentId}/tools/${toolId}/detach`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     });
@@ -184,14 +194,14 @@ export const agentsApi = {
 
   /** Get conversations for an agent */
   getConversations: async (agentId: string): Promise<Conversation[]> => {
-    const res = await fetch(`${API_BASE}/api/agents/${agentId}/conversations`);
+    const res = await fetch(`${API_BASE()}/api/agents/${agentId}/conversations`);
     const data = await handleResponse<ApiResponse<Conversation[]>>(res);
     return data.data || [];
   },
 
   /** Create a new conversation for an agent */
   createConversation: async (agentId: string): Promise<Conversation> => {
-    const res = await fetch(`${API_BASE}/api/agents/${agentId}/conversations`, {
+    const res = await fetch(`${API_BASE()}/api/agents/${agentId}/conversations`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     });
@@ -207,14 +217,14 @@ export const agentsApi = {
 export const chatApi = {
   /** List conversations for an agent */
   listConversations: async (agentId: string): Promise<Conversation[]> => {
-    const res = await fetch(`${API_BASE}/api/chat/conversations?agent_id=${encodeURIComponent(agentId)}`);
+    const res = await fetch(`${API_BASE()}/api/chat/conversations?agent_id=${encodeURIComponent(agentId)}`);
     const data = await handleResponse<ApiResponse<Conversation[]>>(res);
     return data.data || [];
   },
 
   /** Get or create a conversation for an agent */
   getOrCreateConversation: async (agentId: string): Promise<Conversation> => {
-    const res = await fetch(`${API_BASE}/api/chat/conversations`, {
+    const res = await fetch(`${API_BASE()}/api/chat/conversations`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agentId }),
@@ -227,7 +237,7 @@ export const chatApi = {
   /** Get message history for a conversation */
   getMessages: async (conversationId: string, limit = 50): Promise<Message[]> => {
     const res = await fetch(
-      `${API_BASE}/api/chat/conversations/${conversationId}/messages?limit=${limit}`
+      `${API_BASE()}/api/chat/conversations/${conversationId}/messages?limit=${limit}`
     );
     const data = await handleResponse<ApiResponse<Message[]>>(res);
     return data.data || [];
@@ -242,7 +252,7 @@ export const chatApi = {
     message: string,
     agentId?: string
   ): AsyncGenerator<{ event: string; data: unknown }, void, unknown> {
-    const url = `${API_BASE}/api/chat/conversations/${conversationId}/message`;
+    const url = `${API_BASE()}/api/chat/conversations/${conversationId}/message`;
     const queryParams = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : '';
 
     const res = await fetch(url + queryParams, {
@@ -331,7 +341,7 @@ export const chatApi = {
     approvals: Array<{ tool_use_id: string; approved: boolean; feedback?: string }>,
     agentId?: string
   ): AsyncGenerator<{ event: string; data: unknown }, void, unknown> {
-    const url = `${API_BASE}/api/chat/conversations/${conversationId}/approve`;
+    const url = `${API_BASE()}/api/chat/conversations/${conversationId}/approve`;
     const queryParams = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : '';
 
     const res = await fetch(url + queryParams, {
@@ -425,7 +435,7 @@ export const deployApi = {
   /** Deploy an agent to selected channels */
   deployAgent: async (agentId: string, config: DeployConfig): Promise<DeployResponse> => {
     try {
-      const res = await fetch(`${API_BASE}/api/agents/${agentId}/deploy`, {
+      const res = await fetch(`${API_BASE()}/api/agents/${agentId}/deploy`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),
@@ -455,7 +465,7 @@ export const deployApi = {
   /** Get deployment status for an agent */
   getDeployStatus: async (agentId: string): Promise<DeployedChannel[]> => {
     try {
-      const res = await fetch(`${API_BASE}/api/agents/${agentId}/deploy/status`);
+      const res = await fetch(`${API_BASE()}/api/agents/${agentId}/deploy/status`);
       const data = await handleResponse<ApiResponse<DeployedChannel[]>>(res);
       return data.data || [];
     } catch (error) {
@@ -467,7 +477,7 @@ export const deployApi = {
   /** Undeploy agent from a channel */
   undeployChannel: async (agentId: string, channel: ChannelType): Promise<boolean> => {
     try {
-      const res = await fetch(`${API_BASE}/api/agents/${agentId}/deploy/${channel}`, {
+      const res = await fetch(`${API_BASE()}/api/agents/${agentId}/deploy/${channel}`, {
         method: 'DELETE',
       });
       await handleResponse<ApiResponse<void>>(res);
@@ -481,7 +491,7 @@ export const deployApi = {
   /** Get available Matrix rooms */
   getMatrixRooms: async (): Promise<{ id: string; name: string }[]> => {
     try {
-      const res = await fetch(`${API_BASE}/api/channels/matrix/rooms`);
+      const res = await fetch(`${API_BASE()}/api/channels/matrix/rooms`);
       const data = await handleResponse<ApiResponse<{ id: string; name: string }[]>>(res);
       return data.data || [];
     } catch (error) {
@@ -496,7 +506,7 @@ export const deployApi = {
   /** Get available Telegram chats */
   getTelegramChats: async (): Promise<{ id: string; name: string }[]> => {
     try {
-      const res = await fetch(`${API_BASE}/api/channels/telegram/chats`);
+      const res = await fetch(`${API_BASE()}/api/channels/telegram/chats`);
       const data = await handleResponse<ApiResponse<{ id: string; name: string }[]>>(res);
       return data.data || [];
     } catch (error) {
