@@ -2,6 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ServerEvent, ClientEvent } from "../types";
 import { api } from "../services/api";
 
+// Type for conversation objects returned by listConversations
+interface Conversation {
+  id: string;
+  created_at?: string | number;
+  updated_at?: string | number;
+}
+
 export function useIPC(onEvent: (event: ServerEvent) => void) {
   const [connected, setConnected] = useState(false);
   const unsubscribeRef = useRef<(() => void) | null>(null);
@@ -59,11 +66,12 @@ export function useIPC(onEvent: (event: ServerEvent) => void) {
       switch (event.type) {
         case "session.list": {
           // Get conversations from API
-          const conversations = await api.listConversations('default-agent');
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const conversations = await (api as any).listConversations('default-agent');
           onEvent({
             type: "session.list",
             payload: {
-              sessions: conversations.map(c => ({
+              sessions: conversations.map((c: Conversation) => ({
                 id: c.id,
                 title: 'Conversation ' + c.id.slice(0, 8),
                 status: 'idle',
@@ -76,7 +84,8 @@ export function useIPC(onEvent: (event: ServerEvent) => void) {
         }
         case "session.start": {
           // Create a new conversation
-          const conv = await api.createConversation('default-agent');
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const conv = await (api as any).createConversation('default-agent');
           onEvent({
             type: "session.status",
             payload: {

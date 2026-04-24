@@ -27,7 +27,14 @@ export function ToolAccessStep({ selectedTools, onChange }: ToolAccessStepProps)
     try {
       setLoading(true);
       const allTools = await agentsApi.listAllTools();
-      setTools(allTools);
+      // SDK Tool.name is string | null | undefined; coerce for local type.
+      const normalized: Tool[] = allTools.map((t) => ({
+        id: t.id,
+        name: t.name ?? 'unnamed',
+        description: t.description ?? undefined,
+        tags: t.tags ?? undefined,
+      }));
+      setTools(normalized);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load tools');
     } finally {

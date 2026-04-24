@@ -34,6 +34,23 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("get-config"),
     saveConfig: (config: { serverUrl?: string; apiKey?: string; permissionMode?: 'strict' | 'bypass'; windowWidth?: number; windowHeight?: number; theme?: 'light' | 'dark'; pollingInterval?: number }) =>
         ipcInvoke("save-config", config),
+
+    // letta-code subprocess APIs
+    lettaCode: {
+        getStatus: () => electron.ipcRenderer.invoke("letta-code:get-status"),
+        spawn: (opts?: { cwd?: string }) => electron.ipcRenderer.invoke("letta-code:spawn", opts ?? {}),
+        stop: () => electron.ipcRenderer.invoke("letta-code:stop"),
+        onStatus: (callback: (payload: LettaCodeStatusPayload) => void) => {
+            const cb = (_: Electron.IpcRendererEvent, payload: LettaCodeStatusPayload) => callback(payload);
+            electron.ipcRenderer.on("letta-code:status", cb);
+            return () => electron.ipcRenderer.off("letta-code:status", cb);
+        },
+        onLog: (callback: (entry: { stream: "stdout" | "stderr"; line: string }) => void) => {
+            const cb = (_: Electron.IpcRendererEvent, entry: { stream: "stdout" | "stderr"; line: string }) => callback(entry);
+            electron.ipcRenderer.on("letta-code:log", cb);
+            return () => electron.ipcRenderer.off("letta-code:log", cb);
+        },
+    },
 } satisfies Window['electron'])
 
 function ipcInvoke<Key extends keyof EventPayloadMapping>(key: Key, ...args: any[]): Promise<EventPayloadMapping[Key]> {

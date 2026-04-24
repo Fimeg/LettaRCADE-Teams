@@ -308,7 +308,7 @@ export async function runLetta(options: RunnerOptions): Promise<RunnerHandle> {
           status: "error",
           title: currentSessionId,
           error: String(error),
-          agentId: lettaSession?.agentId ?? undefined,
+          agentId: cachedAgentId || undefined,
         }
       });
     } finally {

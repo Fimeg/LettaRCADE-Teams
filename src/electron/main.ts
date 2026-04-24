@@ -36,10 +36,14 @@ try {
 import { getPreloadPath, getUIPath, getIconPath } from "./pathResolver.js";
 import { getStaticData, pollResources, stopPolling } from "./test.js";
 import { handleClientEvent, cleanupAllSessions } from "./ipc-handlers.js";
+import { startProxyServer, type ProxyHandle } from "./proxy-server.js";
+import { LettaCodeManager, type LettaCodeStatusPayload } from "./letta-code-manager.js";
 
 let cleanupComplete = false;
 let mainWindow: BrowserWindow | null = null;
 let appConfig: Config;
+let proxyHandle: ProxyHandle | null = null;
+const lettaCode = new LettaCodeManager();
 
 // IPC validation helper
 function validateClientEvent(data: unknown): data is ClientEvent {
@@ -87,6 +91,9 @@ function cleanup(): void {
     globalShortcut.unregisterAll();
     stopPolling();
     cleanupAllSessions();
+    // Fire-and-forget; Electron is tearing down anyway
+    lettaCode.stop().catch(() => {});
+    proxyHandle?.stop().catch(() => {});
     closeDatabase();
     killViteDevServer();
 }
@@ -95,6 +102,19 @@ function handleSignal(): void {
     cleanup();
     app.quit();
 }
+
+// Allow self-signed certificates for local development
+app.on('certificate-error', (event, webContents, url, error, certificate, callback) => {
+    // Allow connections to local/private IPs with self-signed certs
+    const urlObj = new URL(url);
+    const hostname = urlObj.hostname;
+    if (hostname.match(/^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|.*\.local)$/)) {
+        event.preventDefault();
+        callback(true);
+        return;
+    }
+    callback(false);
+});
 
 // Initialize everything when app is ready
 app.on("ready", () => {
@@ -139,8 +159,8 @@ app.on("ready", () => {
                 ...details.responseHeaders,
                 'Content-Security-Policy': [
                     "default-src 'self'; " +
-                    "connect-src 'self' http://localhost:* https://api.letta.com; " +
-                    "script-src 'self'; " +
+                    "connect-src 'self' http://* http://*:* https://* https://*:* ws://* wss://* http://10.10.20.19:* https://10.10.20.19:*; " +
+                    "script-src 'self' 'unsafe-inline'; " +
                     "style-src 'self' 'unsafe-inline'"
                 ]
             }
@@ -202,5 +222,50 @@ app.on("ready", () => {
         }
 
         return result.filePaths[0];
+    });
+
+    // Start local proxy server for letta-code subprocess
+    startProxyServer(
+        appConfig.serverUrl || process.env.LETTA_BASE_URL || "http://localhost:8283",
+        appConfig.apiKey || process.env.LETTA_API_KEY || "",
+    )
+        .then((handle) => {
+            proxyHandle = handle;
+            console.log(`[proxy] listening on 127.0.0.1:${handle.port}`);
+        })
+        .catch((err) => {
+            console.error("[proxy] failed to start:", err);
+        });
+
+    // Broadcast letta-code status changes to renderer
+    lettaCode.on("status", (payload: LettaCodeStatusPayload) => {
+        mainWindow?.webContents.send("letta-code:status", payload);
+    });
+    lettaCode.on("log", (entry: { stream: "stdout" | "stderr"; line: string }) => {
+        mainWindow?.webContents.send("letta-code:log", entry);
+    });
+
+    ipcMain.handle("letta-code:get-status", () => lettaCode.getStatus());
+
+    ipcMain.handle("letta-code:spawn", async (_event, opts: { cwd?: string } = {}) => {
+        if (!proxyHandle) {
+            throw new Error("proxy server not ready yet");
+        }
+        // Keep proxy upstream in sync with latest saved config
+        proxyHandle.setUpstream(
+            appConfig.serverUrl || "http://localhost:8283",
+            appConfig.apiKey || "",
+        );
+        await lettaCode.spawn({
+            proxyPort: proxyHandle.port,
+            sessionToken: proxyHandle.sessionToken,
+            cwd: opts.cwd,
+        });
+        return lettaCode.getStatus();
+    });
+
+    ipcMain.handle("letta-code:stop", async () => {
+        await lettaCode.stop();
+        return lettaCode.getStatus();
     });
 })

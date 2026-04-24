@@ -14,7 +14,8 @@ export function MemoryBlockList({ blocks, readOnly = true, onEditBlock }: Memory
 
   function startEdit(block: MemoryBlock) {
     setEditingBlockId(block.id);
-    setEditContent(block.value);
+    const blockContent = block.value ?? (typeof block.content === 'string' ? block.content : block.content?.text) ?? '';
+    setEditContent(blockContent);
   }
 
   function handleSave(blockId: string) {
@@ -43,11 +44,12 @@ export function MemoryBlockList({ blocks, readOnly = true, onEditBlock }: Memory
     <div className="flex flex-col gap-2">
       {blocks.map((block) => {
         const isExpanded = expandedBlock === block.id;
+        const blockContent = block.value ?? (typeof block.content === 'string' ? block.content : block.content?.text) ?? '';
         const displayValue = isExpanded
-          ? block.value
-          : block.value.length > 100
-            ? `${block.value.slice(0, 100)}...`
-            : block.value;
+          ? blockContent
+          : blockContent.length > 100
+            ? `${blockContent.slice(0, 100)}...`
+            : blockContent;
 
         return (
           <div
@@ -127,7 +129,7 @@ export function MemoryBlockList({ blocks, readOnly = true, onEditBlock }: Memory
                 >
                   {displayValue}
                 </div>
-                {block.value.length > 100 && (
+                {blockContent.length > 100 && (
                   <button
                     onClick={() => setExpandedBlock(isExpanded ? null : block.id)}
                     className="mt-2 text-xs text-accent hover:text-accent-hover transition-colors"

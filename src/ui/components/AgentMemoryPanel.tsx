@@ -9,6 +9,7 @@ import { agentsApi } from "../services/api";
 
 interface AgentMemoryPanelProps {
   agentId: string;
+  /** @deprecated kept for call-site compatibility; the api client owns the base URL */
   apiUrl?: string;
 }
 
@@ -29,7 +30,7 @@ interface Passage {
   score?: number;
 }
 
-export function AgentMemoryPanel({ agentId, apiUrl = "http://localhost:8283" }: AgentMemoryPanelProps) {
+export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
   const [activeTab, setActiveTab] = useState<MemoryTab>("core");
   const [expandedBlocks, setExpandedBlocks] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<EditingState>({
@@ -43,11 +44,11 @@ export function AgentMemoryPanel({ agentId, apiUrl = "http://localhost:8283" }: 
   const [passages, setPassages] = useState<Passage[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [newPassageText, setNewPassageText] = useState("");
-  const [isSearching, setIsSearching] = useState(false);
   const [isInserting, setIsInserting] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
 
   // Curator / Memory Health state
-  const { sacredBlocks, toggleSacred, isSacred, loaded: sacredLoaded } = useSacredBlocks(agentId);
+  const { toggleSacred, isSacred, loaded: sacredLoaded } = useSacredBlocks(agentId);
 
   // Store integration
   const agent = useAppStore((s) => s.agents[agentId]);
@@ -62,11 +63,29 @@ export function AgentMemoryPanel({ agentId, apiUrl = "http://localhost:8283" }: 
 
   const searchArchival = async () => {
     setPassageError(null);
+    setIsSearching(true);
     try {
       const results = await agentsApi.getPassages(agentId, searchQuery.trim() || undefined, 20);
-      setPassages(results);
+      // SDK 0.1.14 Passage shape may differ from local Passage type; normalize.
+      const normalized: Passage[] = (results as unknown as Array<{
+        id: string;
+        text: string;
+        created_at?: string;
+        createdAt?: string;
+        tags?: string[] | null;
+        score?: number;
+      }>).map((p) => ({
+        id: p.id,
+        text: p.text,
+        createdAt: p.createdAt ?? p.created_at ?? null,
+        tags: p.tags ?? [],
+        score: p.score,
+      }));
+      setPassages(normalized);
     } catch (err) {
       setPassageError(err instanceof Error ? err.message : 'Failed to load passages');
+    } finally {
+      setIsSearching(false);
     }
   };
 

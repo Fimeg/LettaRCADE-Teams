@@ -32,6 +32,16 @@ type EventPayloadMapping = {
     "save-config": ConfigData;
 }
 
+type LettaCodeStatus = "stopped" | "starting" | "running" | "stopping" | "crashed";
+
+type LettaCodeStatusPayload = {
+    status: LettaCodeStatus;
+    pid?: number;
+    exitCode?: number | null;
+    exitSignal?: string | null;
+    error?: string;
+}
+
 interface Window {
     electron: {
         subscribeStatistics: (callback: (statistics: Statistics) => void) => UnsubscribeFunction;
@@ -44,5 +54,13 @@ interface Window {
         // Config APIs
         getConfig: () => Promise<ConfigData>;
         saveConfig: (config: Partial<ConfigData>) => Promise<ConfigData>;
+        // letta-code subprocess APIs
+        lettaCode: {
+            getStatus: () => Promise<LettaCodeStatusPayload>;
+            spawn: (opts?: { cwd?: string }) => Promise<LettaCodeStatusPayload>;
+            stop: () => Promise<LettaCodeStatusPayload>;
+            onStatus: (callback: (payload: LettaCodeStatusPayload) => void) => UnsubscribeFunction;
+            onLog: (callback: (entry: { stream: "stdout" | "stderr"; line: string }) => void) => UnsubscribeFunction;
+        };
     }
 }
