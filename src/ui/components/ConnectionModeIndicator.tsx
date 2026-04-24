@@ -4,7 +4,7 @@
  * Local mode: Connected to letta-code (full tool use)
  */
 
-import React, { useState } from 'react';
+import { useState } from 'react';
 
 export type ConnectionMode = 'server' | 'local';
 
@@ -38,18 +38,36 @@ export default function ConnectionModeIndicator({
     error: 'var(--red)',
   }[lettaCodeStatus];
 
+  const getStatusDotClass = () => {
+    switch (lettaCodeStatus) {
+      case 'connected': return 'bg-green-500';
+      case 'connecting': return 'bg-amber-500 animate-pulse';
+      case 'error': return 'bg-red-500';
+      default: return 'bg-ink-300';
+    }
+  };
+
   return (
-    <div className="connection-mode">
-      <div className="mode-toggle">
+    <div className="flex items-center gap-3">
+      {/* Mode Toggle */}
+      <div className="flex bg-surface-cream rounded-lg p-1 border border-ink-900/10">
         <button
-          className={mode === 'server' ? 'active' : ''}
+          className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+            mode === 'server'
+              ? 'bg-accent text-white shadow-sm'
+              : 'text-ink-600 hover:bg-ink-900/5'
+          }`}
           onClick={() => onModeChange('server')}
           title="Server Mode: Direct SDK (management only)"
         >
           Server
         </button>
         <button
-          className={mode === 'local' ? 'active' : ''}
+          className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+            mode === 'local'
+              ? 'bg-accent text-white shadow-sm'
+              : 'text-ink-600 hover:bg-ink-900/5'
+          }`}
           onClick={() => onModeChange('local')}
           title="Local Mode: Full tool use via letta-code"
         >
@@ -58,35 +76,32 @@ export default function ConnectionModeIndicator({
       </div>
 
       {mode === 'local' && (
-        <div className="local-connection">
-          <span
-            className="status-indicator"
-            style={{ background: statusColor }}
-            title={lettaCodeStatus}
-          />
+        <div className="flex items-center gap-2">
+          {/* Status Dot */}
+          <div className={`w-2 h-2 rounded-full ${getStatusDotClass()}`} title={lettaCodeStatus} />
 
           {lettaCodeStatus === 'connected' ? (
             <>
-              <span className="status-label">Connected</span>
+              <span className="text-xs text-ink-600">Connected</span>
               <button
-                className="disconnect-btn"
                 onClick={onDisconnect}
+                className="text-xs text-red-500 hover:text-red-600 px-2 py-1 rounded hover:bg-red-50 transition-colors"
                 title="Disconnect from letta-code"
               >
                 Disconnect
               </button>
             </>
           ) : (
-            <>
+            <div className="relative">
               <button
-                className="connect-btn"
                 onClick={() => setShowConfig(!showConfig)}
+                className="text-xs text-accent hover:text-accent-hover px-2 py-1 rounded hover:bg-accent/10 transition-colors"
               >
                 {lettaCodeStatus === 'connecting' ? 'Connecting...' : 'Connect'}
               </button>
 
               {showConfig && (
-                <div className="connect-config">
+                <div className="absolute top-full right-0 mt-2 bg-surface border border-ink-900/10 rounded-lg shadow-lg p-3 flex gap-2 z-50 min-w-[280px]">
                   <input
                     type="text"
                     value={lettaCodeUrl}
@@ -95,15 +110,24 @@ export default function ConnectionModeIndicator({
                     onKeyDown={e => {
                       if (e.key === 'Enter') onConnect();
                     }}
+                    className="flex-1 px-3 py-1.5 text-xs rounded-lg border border-ink-900/10 bg-surface-secondary focus:border-accent focus:outline-none"
                   />
-                  <button onClick={onConnect}>Connect</button>
+                  <button
+                    onClick={onConnect}
+                    className="px-3 py-1.5 text-xs font-medium rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors"
+                  >
+                    Connect
+                  </button>
                 </div>
               )}
-            </>
+            </div>
           )}
 
           {supportedCommands.length > 0 && lettaCodeStatus === 'connected' && (
-            <span className="supported-commands" title={`Commands: ${supportedCommands.join(', ')}`}>
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded bg-accent/10 text-accent"
+              title={`Commands: ${supportedCommands.join(', ')}`}
+            >
               {supportedCommands.length} commands
             </span>
           )}
