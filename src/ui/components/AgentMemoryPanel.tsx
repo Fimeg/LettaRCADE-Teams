@@ -2,7 +2,6 @@ import { useState, useCallback, useEffect } from "react";
 import { useAppStore, type MemoryBlock } from "../store/useAppStore";
 import { useSacredBlocks } from "../hooks/useSacredBlocks";
 import { calculateMemoryHealth, classifyTier, tierColors } from "../utils/memoryHealth";
-import { MemoryPressureBar } from "./MemoryPressureBar";
 import { MemoryPressureGauge } from "./MemoryPressureGauge";
 import { BlockPressureIndicator } from "./BlockPressureIndicator";
 import { SacredToggle } from "./SacredToggle";
