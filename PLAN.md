@@ -11,7 +11,8 @@ Architecture reference lives in `CLAUDE.md` (do not duplicate here).
 | Subsystem | Status | Notes |
 |---|---|---|
 | Conversations | 🟡 basic | History loads (fixed 2026-04-24); create on first send; delete UI w/ confirm (2026-04-24); scoped per-conversation (fixed 2026-04-24) |
-| Messaging / streaming | 🟢 working | Agent-scoped messaging via `useStreamingMessages` hook calling `client.agents.messages.create()` (refactored 2026-04-24 — eliminated chatApi wrapper, follows letta-code-new patterns); message history via `useMessageHistory` hook; tool/reasoning messages render |
+| Messaging / streaming | 🟡 refactored | Agent-scoped messaging via `useStreamingMessages` hook calling `client.agents.messages.create()` (refactored 2026-04-24 — eliminated chatApi wrapper, follows letta-code-new patterns); **NOT YET VERIFIED WORKING** — needs runtime test |
+| **Next: Local mode + channels** | 🔮 future | Connect to `letta server --channels matrix,discord` and show available nodes/machines like letta-code-new |
 | Memory | 🟢 working | Curator health, sacred blocks, archival CRUD; visuals are basic bars |
 | Agents | 🟢 working | List / detail / edit / delete; creation wizard wired in `App.tsx` (2026-04-24); config form now pre-populates (was reading a non-existent `detail.raw` field) |
 | Slash commands | 🟢 working | `/doctor /clear /remember /recompile` via native client |
@@ -88,12 +89,44 @@ Retired planning docs (do not edit; reference only):
 
 ---
 
+## Next Session Focus
+
+### Priority 1: Verify Messaging Works
+**Status:** Code refactored but not runtime tested. User sent "Hello" and got no response.
+
+**Files to check:**
+- `src/ui/hooks/useStreamingMessages.ts` — verify `client.agents.messages.create()` call
+- `src/ui/hooks/useMessageHistory.ts` — verify `client.conversations.messages.list()` call
+- `src/ui/components/AgentWorkspace.tsx` — verify hooks integration
+
+**Debug steps needed:**
+1. Add console logging to see if SDK calls are made
+2. Check if streaming response yields chunks
+3. Verify chunk types match expected (`assistant_message`, etc.)
+4. Check if UI state updates properly
+
+### Priority 2: Local Mode + Channel Discovery (Future)
+When user switches to "local" mode in connection settings:
+- Connect to `letta server --channels matrix,discord` 
+- Show available nodes/machines like letta-code-new does
+- Let user choose which node to connect to
+
+### Priority 3: Active Work Items
+1. **Memory block management — memfs vs traditional** ⛔
+2. **Save-diff preview on settings** 🆕
+3. **Server-setup wizard modal** 📝
+4. **Provider config panel** 📝
+5. **`/wrapup` for stale conversations** 💡
+
+---
+
 ## Working notes
 
 - **The four reference projects** (see `CLAUDE.md`): letta-code-sdk 0.1.14, this repo (0.0.5 base), letta-code-new (modern reference), letta server 0.16.7.
 - **No custom wrapper APIs** — use `@letta-ai/letta-client` directly.
 - **Gitea token** in `MASTER_TRACKING.md` (moving to archive); keep in env, not this file.
 - When closing issues, link the shipping commit or code path in the close comment so the trail survives.
+- **Messaging refactor complete but unverified** — next session must test and fix if needed.
 
 ---
 
