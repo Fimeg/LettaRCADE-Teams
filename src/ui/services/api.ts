@@ -32,10 +32,17 @@ export interface Agent {
   updated_at?: string;
 }
 
+/**
+ * Memory block for SDK 0.1.14+.
+ * Supports both legacy `value` field and new `content` field.
+ */
 export interface MemoryBlock {
   id: string;
   label: string;
-  value: string;
+  /** Legacy field - SDK <0.1.14 used `value` */
+  value?: string;
+  /** New field - SDK 0.1.14+ uses `content` (string or { text: string }) */
+  content?: string | { text?: string };
   limit?: number;
 }
 

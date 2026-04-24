@@ -5,9 +5,37 @@ import {
   type SDKMessage,
   type CanUseToolResponse,
   type SendMessage,
+  type MessageContentItem,
 } from "@letta-ai/letta-code-sdk";
 import type { ServerEvent } from "../types.js";
 import type { PendingPermission } from "./runtime-state.js";
+
+/**
+ * Extract text content from SDK 0.1.14 message content.
+ * Handles new format where content can be:
+ * - string (direct text)
+ * - { text: string } (text object)
+ * - MessageContentItem[] (multimodal)
+ */
+function extractContentText(content: unknown): string {
+  if (typeof content === 'string') {
+    return content;
+  }
+  if (content && typeof content === 'object' && 'text' in content) {
+    return String((content as { text?: string }).text ?? '');
+  }
+  if (Array.isArray(content)) {
+    // Handle MessageContentItem[] - extract all text parts
+    return content
+      .map((item: MessageContentItem) => {
+        if (typeof item === 'string') return item;
+        if (item.type === 'text') return item.text ?? '';
+        return '';
+      })
+      .join('');
+  }
+  return '';
+}
 
 // Simplified session type for runner
 export type RunnerSession = {
@@ -67,14 +95,14 @@ let activeLettaSession: LettaSession | null = null;
 let cachedAgentId: string | null = null;
 
 /**
- * Convert a simple prompt string to the new SDK 0.1.14 SendMessage format.
- * Supports multimodal: string | MessageContentItem[]
+ * Convert a simple prompt string to SDK 0.1.14 SendMessage format.
+ * SDK 0.1.14 SendMessage type: string | MessageContentItem[]
+ * MessageContentItem: { type: "text", text: string } | { type: "image", ... }
  */
 function toSendMessage(prompt: string): SendMessage {
-  // For now, we keep it simple as a string
-  // The SDK also accepts MessageContentItem[] for multimodal:
-  // [{ type: "text", text: prompt }]
-  return prompt;
+  // SDK 0.1.14 accepts both string and MessageContentItem[]
+  // Using the array format for consistency with multimodal support
+  return [{ type: "text", text: prompt }];
 }
 
 export async function runLetta(options: RunnerOptions): Promise<RunnerHandle> {
@@ -194,6 +222,17 @@ export async function runLetta(options: RunnerOptions): Promise<RunnerHandle> {
         currentSessionId = lettaSession.conversationId;
         debug("session initialized", { conversationId: lettaSession.conversationId, agentId: lettaSession.agentId });
         onSessionUpdate?.({ lettaConversationId: lettaSession.conversationId });
+
+        // Emit session.status with agentId for SDK 0.1.14+ compatibility
+        onEvent({
+          type: "session.status",
+          payload: {
+            sessionId: currentSessionId,
+            status: "running",
+            title: currentSessionId,
+            agentId: lettaSession.agentId ?? undefined,
+          }
+        });
       } else {
         log("WARNING: no conversationId available after send()");
       }
@@ -205,13 +244,25 @@ export async function runLetta(options: RunnerOptions): Promise<RunnerHandle> {
       }
 
       // Stream messages - SDK 0.1.14 pattern
+      // The stream yields SDKMessage objects with content in the new format
       debug("starting stream");
       let messageCount = 0;
       for await (const message of lettaSession.stream()) {
         messageCount++;
-        debug("received message", { type: message.type, count: messageCount });
 
-        // Send message directly to frontend (no transform needed)
+        // Debug log with content preview (if available)
+        const contentPreview = 'content' in message
+          ? extractContentText((message as { content?: unknown }).content).slice(0, 50)
+          : '';
+        debug("received message", {
+          type: message.type,
+          count: messageCount,
+          contentPreview: contentPreview || undefined,
+          hasAgentId: 'agentId' in message ? !!(message as { agentId?: string }).agentId : undefined,
+        });
+
+        // Send message directly to frontend
+        // SDK 0.1.14 messages use `content` field (not `value`)
         sendMessage(message);
 
         // Check for result to update session status
@@ -220,7 +271,12 @@ export async function runLetta(options: RunnerOptions): Promise<RunnerHandle> {
           debug("result received", { success: message.success, status });
           onEvent({
             type: "session.status",
-            payload: { sessionId: currentSessionId, status, title: currentSessionId }
+            payload: {
+              sessionId: currentSessionId,
+              status,
+              title: currentSessionId,
+              agentId: lettaSession.agentId ?? undefined,
+            }
           });
         }
       }
@@ -247,7 +303,13 @@ export async function runLetta(options: RunnerOptions): Promise<RunnerHandle> {
       });
       onEvent({
         type: "session.status",
-        payload: { sessionId: currentSessionId, status: "error", title: currentSessionId, error: String(error) }
+        payload: {
+          sessionId: currentSessionId,
+          status: "error",
+          title: currentSessionId,
+          error: String(error),
+          agentId: lettaSession?.agentId ?? undefined,
+        }
       });
     } finally {
       debug("runLetta finally block, clearing activeLettaSession");

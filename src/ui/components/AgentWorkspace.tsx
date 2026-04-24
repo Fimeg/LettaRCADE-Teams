@@ -3,12 +3,14 @@ import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "reac
 import { useAppStore } from "../store/useAppStore";
 import { useMessageWindow } from "../hooks/useMessageWindow";
 import { useIPC } from "../hooks/useIPC";
-import type { ClientEvent, ServerEvent } from "../types";
+import { useLettaCodeWs, LettaCodeMessage } from "../hooks/useLettaCodeWs";
+import { chatApi, getApiBase } from "../services/api";
+import type { ClientEvent, ServerEvent, StreamMessage } from "../types";
 import { MessageCard } from "./EventCard";
-import { PromptInput } from "./PromptInput";
 import MDContent from "../render/markdown";
 import { AgentMemoryPanel } from "./AgentMemoryPanel";
 import { AgentConfigPanel } from "./AgentConfigPanel";
+import ConnectionModeIndicator, { ConnectionMode } from "./ConnectionModeIndicator";
 
 const SCROLL_THRESHOLD = 50;
 
@@ -18,11 +20,18 @@ interface AgentWorkspaceProps {
   sendEvent: (event: ClientEvent) => void;
 }
 
-// Placeholder for slash commands - can be extended
-const SLASH_COMMANDS = [
-  { command: "/clear", description: "Clear conversation" },
-  { command: "/doctor", description: "Run diagnostics" },
-  { command: "/memory", description: "View memory" },
+// ═══ Slash Commands ═══
+interface SlashCommand {
+  id: string;
+  desc: string;
+  requires: 'local' | 'any';
+}
+
+const SLASH_COMMANDS: SlashCommand[] = [
+  { id: 'doctor', desc: 'Audit and refine memory structure', requires: 'local' },
+  { id: 'clear', desc: 'Clear in-context messages', requires: 'any' },
+  { id: 'remember', desc: 'Remember something from conversation', requires: 'local' },
+  { id: 'recompile', desc: 'Recompile agent memory', requires: 'any' },
 ];
 
 export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspaceProps) {
@@ -47,12 +56,93 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
   const shouldRestoreScrollRef = useRef(false);
   const prevMessagesLengthRef = useRef(0);
 
+  // Connection mode for slash commands
+  const [connectionMode, setConnectionMode] = useState<ConnectionMode>('server');
+  const [lettaCodeUrl, setLettaCodeUrl] = useState('ws://localhost:8283/ws');
+
+  // Input state for slash commands
+  const [inputValue, setInputValue] = useState('');
+  const [showSlashCommands, setShowSlashCommands] = useState(false);
+
+  // Letta-code WebSocket connection
+  const {
+    status: lettaCodeStatus,
+    deviceStatus,
+    subscribe: subscribeLettaCode,
+    connect: connectLettaCode,
+    disconnect: disconnectLettaCode,
+    executeCommand,
+  } = useLettaCodeWs(connectionMode === 'local' ? lettaCodeUrl : null);
+
+  // API-loaded messages state
+  const [messages, setMessages] = useState<StreamMessage[]>([]);
+  const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+  const [messagesError, setMessagesError] = useState<string | null>(null);
+
   // Load agent if not loaded
   useEffect(() => {
     if (!agent?.loaded) {
       loadAgent(agentId);
     }
   }, [agentId, agent?.loaded, loadAgent]);
+
+  // Load messages from API when conversation changes
+  useEffect(() => {
+    if (!activeConversationId) {
+      setMessages([]);
+      return;
+    }
+
+    const loadMessages = async () => {
+      setIsLoadingMessages(true);
+      setMessagesError(null);
+      try {
+        const apiMessages = await chatApi.getMessages(activeConversationId);
+        // Convert API messages to StreamMessage format
+        const streamMessages: StreamMessage[] = apiMessages.map((msg): StreamMessage => {
+          // Handle different content formats
+          let content = '';
+          if (typeof msg.content === 'string') {
+            content = msg.content;
+          } else if (msg.content && typeof msg.content === 'object') {
+            if ('text' in msg.content && typeof msg.content.text === 'string') {
+              content = msg.content.text;
+            } else if (Array.isArray(msg.content)) {
+              // Handle array format (e.g., content blocks)
+              content = msg.content
+                .filter(c => c.type === 'text' || typeof c.text === 'string')
+                .map(c => c.text || '')
+                .join('');
+            }
+          }
+
+          const baseMessage = {
+            uuid: msg.id,
+            createdAt: msg.created_at ? new Date(msg.created_at).getTime() : Date.now(),
+          };
+
+          if (msg.role === 'user') {
+            return { ...baseMessage, type: 'user_prompt' as const, prompt: content };
+          } else if (msg.role === 'assistant') {
+            return { ...baseMessage, type: 'assistant' as const, content };
+          } else if (msg.role === 'system') {
+            return { ...baseMessage, type: 'system' as const, content };
+          } else {
+            // Default to assistant for unknown roles
+            return { ...baseMessage, type: 'assistant' as const, content };
+          }
+        });
+        setMessages(streamMessages);
+      } catch (err) {
+        setMessagesError(err instanceof Error ? err.message : 'Failed to load messages');
+        console.error('[AgentWorkspace] Failed to load messages:', err);
+      } finally {
+        setIsLoadingMessages(false);
+      }
+    };
+
+    loadMessages();
+  }, [activeConversationId]);
 
   // Handle partial messages from stream events
   const handlePartialMessages = useCallback((partialEvent: ServerEvent) => {
@@ -96,20 +186,21 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
   // IPC connection handled at App level
   useIPC(onEvent);
 
-  // Chat state - placeholder until conversation messages are loaded from API
-  // TODO: Load actual conversation messages when API supports it
-  const messages: any[] = [];
+  // Permission requests and running state (managed via IPC/events)
   const permissionRequests: any[] = [];
   const isRunning = false;
 
   const {
     visibleMessages,
     hasMoreHistory,
-    isLoadingHistory,
+    isLoadingHistory: isLoadingMoreHistory,
     loadMoreMessages,
     resetToLatest,
     totalMessages,
   } = useMessageWindow(messages, permissionRequests, activeConversationId);
+
+  // Combined loading state (initial load or loading more history)
+  const isLoadingHistory = isLoadingMessages || isLoadingMoreHistory;
 
   // Scroll handling
   const handleScroll = useCallback(() => {
@@ -186,6 +277,42 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
     prevMessagesLengthRef.current = messages.length;
   }, [messages, partialMessage, shouldAutoScroll]);
 
+  // Letta-code WebSocket events
+  useEffect(() => {
+    if (connectionMode !== 'local' || lettaCodeStatus !== 'connected') return;
+
+    const unsubscribe = subscribeLettaCode((msg: LettaCodeMessage) => {
+      // Handle stream_delta for command responses
+      if (msg.type === 'stream_delta' && msg.delta) {
+        const delta = msg.delta;
+        if (delta.message_type === 'assistant_message') {
+          const text = delta.content || '';
+          setMessages(prev => {
+            const last = prev[prev.length - 1];
+            if (last && last.type === 'assistant' && last.uuid === delta.id) {
+              return [...prev.slice(0, -1), { ...last, content: last.content + text }];
+            }
+            return [...prev, {
+              uuid: delta.id || `msg-${Date.now()}`,
+              createdAt: Date.now(),
+              type: 'assistant',
+              content: text,
+            }];
+          });
+        } else if (delta.message_type === 'reasoning_message') {
+          setMessages(prev => [...prev, {
+            uuid: `reasoning-${Date.now()}`,
+            createdAt: Date.now(),
+            type: 'system',
+            content: delta.reasoning || '',
+          }]);
+        }
+      }
+    });
+
+    return () => { if (unsubscribe) unsubscribe(); };
+  }, [connectionMode, lettaCodeStatus, subscribeLettaCode]);
+
   const scrollToBottom = useCallback(() => {
     setShouldAutoScroll(true);
     setHasNewMessages(false);
@@ -199,12 +326,166 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
     resetToLatest();
   }, [resetToLatest]);
 
+  // Handle sending input with slash command detection
+  const handleInputSend = useCallback(async () => {
+    if (!inputValue.trim() || !activeConversationId) return;
+
+    const userMsg = inputValue.trim();
+    setInputValue('');
+    setShowSlashCommands(false);
+    setShouldAutoScroll(true);
+    setHasNewMessages(false);
+    resetToLatest();
+
+    // Check for slash command
+    if (userMsg.startsWith('/')) {
+      const [cmd, ...args] = userMsg.slice(1).split(/\s+/);
+      await handleSlashCommand(cmd, args.join(' '));
+      return;
+    }
+
+    // Regular message - send via IPC
+    sendEvent({
+      type: 'session.continue',
+      payload: {
+        sessionId: activeConversationId,
+        prompt: userMsg,
+      }
+    });
+  }, [inputValue, activeConversationId, handleSlashCommand, resetToLatest, sendEvent]);
+
   // Handle slash command
   const handleCommand = useCallback((command: string) => {
     setShowCommands(false);
     // TODO: Implement command handling
     console.log("Command:", command);
   }, []);
+
+  // ═══ SLASH COMMAND HANDLERS ═══
+
+  const handleSlashCommand = useCallback(async (cmd: string, args: string) => {
+    const cmdDef = SLASH_COMMANDS.find(c => c.id === cmd);
+
+    if (!cmdDef) {
+      setMessages(prev => [...prev, {
+        uuid: `error-${Date.now()}`,
+        createdAt: Date.now(),
+        type: 'system' as const,
+        content: `Unknown command: /${cmd}. Available: ${SLASH_COMMANDS.map(c => `/${c.id}`).join(', ')}`,
+      }]);
+      return;
+    }
+
+    // Check if command requires local mode
+    if (cmdDef.requires === 'local' && connectionMode !== 'local') {
+      setMessages(prev => [...prev, {
+        uuid: `error-${Date.now()}`,
+        createdAt: Date.now(),
+        type: 'system' as const,
+        content: `/${cmd} requires local mode. Switch to local mode first.`,
+      }]);
+      return;
+    }
+
+    // Check if letta-code is connected for local commands
+    if (cmdDef.requires === 'local' && lettaCodeStatus !== 'connected') {
+      setMessages(prev => [...prev, {
+        uuid: `error-${Date.now()}`,
+        createdAt: Date.now(),
+        type: 'system' as const,
+        content: `/${cmd} requires letta-code connection. Current status: ${lettaCodeStatus}`,
+      }]);
+      return;
+    }
+
+    // Execute via appropriate path
+    if (connectionMode === 'local' && lettaCodeStatus === 'connected' && activeConversationId) {
+      // Send via letta-code WebSocket
+      setMessages(prev => [...prev, {
+        uuid: `system-${Date.now()}`,
+        createdAt: Date.now(),
+        type: 'system' as const,
+        content: `Running /${cmd}...`,
+      }]);
+
+      const success = executeCommand({
+        commandId: cmd,
+        agentId,
+        conversationId: activeConversationId,
+        args: args || undefined,
+      });
+
+      if (!success) {
+        setMessages(prev => [...prev, {
+          uuid: `error-${Date.now()}`,
+          createdAt: Date.now(),
+          type: 'system' as const,
+          content: `/${cmd} failed: Could not send to letta-code`,
+        }]);
+      }
+    } else if (connectionMode === 'local') {
+      // Server mode fallback for commands that support it
+      if (cmd === 'recompile' || cmd === 'clear') {
+        await runServerCommand(cmd);
+      } else {
+        setMessages(prev => [...prev, {
+          uuid: `error-${Date.now()}`,
+          createdAt: Date.now(),
+          type: 'system' as const,
+          content: `/${cmd} requires local mode.`,
+        }]);
+      }
+    }
+  }, [connectionMode, lettaCodeStatus, activeConversationId, agentId, executeCommand]);
+
+  const runServerCommand = useCallback(async (cmd: string) => {
+    if (!activeConversationId) return;
+
+    setMessages(prev => [...prev, {
+      uuid: `system-${Date.now()}`,
+      createdAt: Date.now(),
+      type: 'system' as const,
+      content: `Running /${cmd}...`,
+    }]);
+
+    try {
+      // Use the chatApi service - need to add command endpoint
+      const res = await fetch(`/api/commands/${cmd}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId, conversationId: activeConversationId }),
+      });
+      const json = await res.json();
+
+      if (json.success) {
+        setMessages(prev => [...prev, {
+          uuid: `system-${Date.now()}`,
+          createdAt: Date.now(),
+          type: 'system' as const,
+          content: `/${cmd} completed: ${json.message || 'OK'}`,
+        }]);
+
+        if (cmd === 'clear') {
+          // Reload messages after clear
+          setMessages([]);
+        }
+      } else {
+        setMessages(prev => [...prev, {
+          uuid: `error-${Date.now()}`,
+          createdAt: Date.now(),
+          type: 'system' as const,
+          content: `/${cmd} failed: ${json.error || 'Unknown error'}`,
+        }]);
+      }
+    } catch (err: any) {
+      setMessages(prev => [...prev, {
+        uuid: `error-${Date.now()}`,
+        createdAt: Date.now(),
+        type: 'system' as const,
+        content: `/${cmd} error: ${err.message}`,
+      }]);
+    }
+  }, [agentId, activeConversationId, setMessages]);
 
   // Get display model name
   const getModelDisplay = (model: string) => {
@@ -258,6 +539,18 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
         </div>
 
         <div className="flex items-center gap-3">
+          {/* Connection Mode Indicator */}
+          <ConnectionModeIndicator
+            mode={connectionMode}
+            onModeChange={setConnectionMode}
+            lettaCodeStatus={lettaCodeStatus}
+            lettaCodeUrl={lettaCodeUrl}
+            onLettaCodeUrlChange={setLettaCodeUrl}
+            onConnect={connectLettaCode}
+            onDisconnect={disconnectLettaCode}
+            supportedCommands={deviceStatus?.supported_commands}
+          />
+
           {/* Conversation Selector */}
           {agent.conversations && agent.conversations.length > 0 && (
             <select
@@ -282,17 +575,30 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
               / Commands
             </button>
             {showCommands && (
-              <div className="absolute right-0 top-full mt-1 w-48 bg-surface border border-ink-900/10 rounded-lg shadow-lg z-50 py-1">
-                {SLASH_COMMANDS.map((cmd) => (
-                  <button
-                    key={cmd.command}
-                    onClick={() => handleCommand(cmd.command)}
-                    className="w-full px-4 py-2 text-left text-sm hover:bg-ink-900/5 flex items-center justify-between"
-                  >
-                    <span className="font-medium text-ink-900">{cmd.command}</span>
-                    <span className="text-xs text-ink-500">{cmd.description}</span>
-                  </button>
-                ))}
+              <div className="absolute right-0 top-full mt-1 w-56 bg-surface border border-ink-900/10 rounded-lg shadow-lg z-50 py-1">
+                {SLASH_COMMANDS.map((cmd) => {
+                  const isLocalOnly = cmd.requires === 'local';
+                  const isDisabled = isLocalOnly && connectionMode !== 'local';
+                  return (
+                    <button
+                      key={cmd.id}
+                      onClick={() => !isDisabled && handleSlashCommand(cmd.id, '')}
+                      className={`w-full px-4 py-2 text-left text-sm flex items-center justify-between ${
+                        isDisabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-ink-900/5'
+                      }`}
+                      disabled={isDisabled}
+                      title={isDisabled ? 'Requires local mode' : cmd.desc}
+                    >
+                      <span className="font-medium text-ink-900">/{cmd.id}</span>
+                      <span className="text-xs text-ink-500">{cmd.desc}</span>
+                      {isLocalOnly && (
+                        <span className="text-[10px] px-1.5 py-0.5 bg-ink-900/10 rounded text-ink-500">
+                          local
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -303,7 +609,7 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
       <PanelGroup orientation="horizontal" className="flex-1">
         {/* Left: Memory Panel */}
         <Panel defaultSize={25} minSize={15} maxSize={40}>
-          <AgentMemoryPanel agentId={agentId} />
+          <AgentMemoryPanel agentId={agentId} apiUrl={getApiBase()} />
         </Panel>
 
         <PanelResizeHandle className="w-1 bg-ink-900/10 hover:bg-accent/50 transition-colors" />
@@ -337,6 +643,18 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                       </svg>
                       <span>Loading...</span>
+                    </div>
+                  </div>
+                )}
+
+                {messagesError && (
+                  <div className="flex items-center justify-center py-4 mb-4">
+                    <div className="flex items-center gap-2 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">
+                      <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                        <circle cx="12" cy="12" r="10" />
+                        <path d="M12 8v4m0 4h.01" />
+                      </svg>
+                      <span>{messagesError}</span>
                     </div>
                   </div>
                 )}
@@ -380,11 +698,80 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
               </div>
             </div>
 
-            <PromptInput
-              sendEvent={sendEvent}
-              onSendMessage={handleSendMessage}
-              disabled={!activeConversationId}
-            />
+            {/* Input with slash command autocomplete */}
+            <div className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-surface via-surface to-transparent pb-6 px-2 lg:pb-8 pt-8 lg:ml-[280px]">
+              <div className="mx-auto w-full max-w-full lg:max-w-3xl">
+                {/* Slash command autocomplete */}
+                {showSlashCommands && inputValue.startsWith('/') && (
+                  <div className="mb-2 bg-surface border border-ink-900/10 rounded-lg shadow-lg py-1 max-h-48 overflow-y-auto">
+                    {SLASH_COMMANDS
+                      .filter(c => c.id.startsWith(inputValue.slice(1).toLowerCase()))
+                      .map(cmd => {
+                        const isLocalOnly = cmd.requires === 'local';
+                        const isDisabled = isLocalOnly && connectionMode !== 'local';
+                        return (
+                          <div
+                            key={cmd.id}
+                            className={`px-4 py-2 flex items-center justify-between ${
+                              isDisabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-ink-900/5 cursor-pointer'
+                            }`}
+                            onClick={() => {
+                              if (!isDisabled) {
+                                setInputValue(`/${cmd.id} `);
+                                setShowSlashCommands(false);
+                              }
+                            }}
+                          >
+                            <div className="flex items-center gap-3">
+                              <span className="font-medium text-ink-900">/{cmd.id}</span>
+                              <span className="text-xs text-ink-500">{cmd.desc}</span>
+                            </div>
+                            {isLocalOnly && (
+                              <span className="text-[10px] px-1.5 py-0.5 bg-accent/10 text-accent rounded">
+                                local
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                  </div>
+                )}
+
+                <div className="flex w-full items-end gap-3 rounded-2xl border border-ink-900/10 bg-surface px-4 py-3 shadow-card">
+                  <textarea
+                    rows={1}
+                    className="flex-1 resize-none bg-transparent py-1.5 text-sm text-ink-800 placeholder:text-muted focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                    placeholder={!activeConversationId ? "Select a conversation..." : "Type a message... (try /doctor, /clear)"}
+                    value={inputValue}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setInputValue(value);
+                      setShowSlashCommands(value.startsWith('/'));
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleInputSend();
+                      }
+                      if (e.key === 'Escape') {
+                        setShowSlashCommands(false);
+                      }
+                    }}
+                    disabled={!activeConversationId}
+                    style={{ minHeight: '24px', maxHeight: '200px' }}
+                  />
+                  <button
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-white hover:bg-accent-hover transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                    onClick={handleInputSend}
+                    disabled={!activeConversationId || !inputValue.trim()}
+                  >
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+                      <path d="M3.4 20.6 21 12 3.4 3.4l2.8 7.2L16 12l-9.8 1.4-2.8 7.2Z" fill="currentColor" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
 
             {hasNewMessages && (
               <button
