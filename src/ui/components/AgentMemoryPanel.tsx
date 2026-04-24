@@ -1,27 +1,16 @@
 import { useState, useCallback, useEffect } from "react";
 import { useAppStore, type MemoryBlock } from "../store/useAppStore";
+import { useSacredBlocks } from "../hooks/useSacredBlocks";
+import { calculateMemoryHealth, classifyTier, tierColors } from "../utils/memoryHealth";
+import { MemoryPressureBar } from "./MemoryPressureBar";
+import { BlockPressureIndicator } from "./BlockPressureIndicator";
+import { SacredToggle } from "./SacredToggle";
+import { agentsApi } from "../services/api";
 
 interface AgentMemoryPanelProps {
   agentId: string;
   apiUrl?: string;
 }
-
-// ═══ Tier Classification ═══
-function classifyTier(label: string): string {
-  if (label === "persona" || label === "human") return "resident";
-  if (label.startsWith("deep__")) return "deep";
-  if (label.startsWith("working__")) return "working";
-  if (label.startsWith("ephemeral__")) return "ephemeral";
-  return "default";
-}
-
-const tierColors: Record<string, string> = {
-  resident: "#8b5cf6", // purple-500
-  deep: "#4f46e5", // indigo-600
-  working: "var(--green, #22c55e)",
-  ephemeral: "var(--orange, #f97316)",
-  default: "#71717a", // zinc-500
-};
 
 type MemoryTab = "core" | "archival" | "sources";
 
@@ -38,11 +27,6 @@ interface Passage {
   createdAt: string | null;
   tags: string[];
   score?: number;
-}
-
-interface MemoryHealth {
-  overallPressure: number;
-  needsAttention: boolean;
 }
 
 export function AgentMemoryPanel({ agentId, apiUrl = "http://localhost:8283" }: AgentMemoryPanelProps) {
@@ -63,10 +47,7 @@ export function AgentMemoryPanel({ agentId, apiUrl = "http://localhost:8283" }: 
   const [isInserting, setIsInserting] = useState(false);
 
   // Curator / Memory Health state
-  const [memoryHealth, setMemoryHealth] = useState<MemoryHealth | null>(null);
-  const [sacredBlocks, setSacredBlocks] = useState<Set<string>>(new Set());
-  const [curatorLoaded, setCuratorLoaded] = useState(false);
-  const [compressing, setCompressing] = useState(false);
+  const { sacredBlocks, toggleSacred, isSacred, loaded: sacredLoaded } = useSacredBlocks(agentId);
 
   // Store integration
   const agent = useAppStore((s) => s.agents[agentId]);
@@ -75,51 +56,47 @@ export function AgentMemoryPanel({ agentId, apiUrl = "http://localhost:8283" }: 
   const memoryBlocks = agent?.memoryBlocks ?? [];
 
   // ═══ Archival Memory API Functions ═══
+  const [passageError, setPassageError] = useState<string | null>(null);
+  const [passageToDelete, setPassageToDelete] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const searchArchival = async () => {
-    if (!searchQuery.trim()) {
-      try {
-        const res = await fetch(`${apiUrl}/api/agents/${agentId}/passages?limit=20`);
-        const json = await res.json();
-        if (json.success) setPassages(json.data);
-      } catch {
-        // Fail silently
-      }
-      return;
-    }
-    setIsSearching(true);
+    setPassageError(null);
     try {
-      const res = await fetch(`${apiUrl}/api/agents/${agentId}/passages/search`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: searchQuery.trim(), topK: 20 }),
-      });
-      const json = await res.json();
-      if (json.success) setPassages(json.data);
-    } catch {
-      // Fail silently
+      const results = await agentsApi.getPassages(agentId, searchQuery.trim() || undefined, 20);
+      setPassages(results);
+    } catch (err) {
+      setPassageError(err instanceof Error ? err.message : 'Failed to load passages');
     }
-    setIsSearching(false);
   };
 
   const insertPassage = async () => {
     if (!newPassageText.trim()) return;
     setIsInserting(true);
+    setPassageError(null);
     try {
-      const res = await fetch(`${apiUrl}/api/agents/${agentId}/passages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: newPassageText.trim() }),
-      });
-      const json = await res.json();
-      if (json.success) {
-        setNewPassageText("");
-        searchArchival(); // Refresh list
-      }
-    } catch {
-      // Fail silently
+      await agentsApi.createPassage(agentId, newPassageText.trim());
+      setNewPassageText("");
+      await searchArchival();
+    } catch (err) {
+      setPassageError(err instanceof Error ? err.message : 'Failed to create passage');
+    } finally {
+      setIsInserting(false);
     }
-    setIsInserting(false);
+  };
+
+  const deletePassage = async (passageId: string) => {
+    setIsDeleting(true);
+    setPassageError(null);
+    try {
+      await agentsApi.deletePassage(agentId, passageId);
+      setPassageToDelete(null);
+      await searchArchival();
+    } catch (err) {
+      setPassageError(err instanceof Error ? err.message : 'Failed to delete passage');
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   // Load passages when switching to archival tab
@@ -129,67 +106,8 @@ export function AgentMemoryPanel({ agentId, apiUrl = "http://localhost:8283" }: 
     }
   }, [activeTab, agentId]);
 
-  // ═══ Curator API Functions ═══
-
-  const fetchCuratorHealth = async () => {
-    try {
-      const res = await fetch(`${apiUrl}/api/curator/agents/${agentId}/health`);
-      const json = await res.json();
-      if (json.success && json.data?.blocks) {
-        const sacred = new Set<string>();
-        json.data.blocks.filter((b: any) => b.isSacred).forEach((b: any) => sacred.add(b.label));
-        setSacredBlocks(sacred);
-        setCuratorLoaded(true);
-      }
-      if (json.success && json.data) {
-        setMemoryHealth({
-          overallPressure: json.data.overallPressure || 0,
-          needsAttention: json.data.needsAttention || false,
-        });
-      }
-    } catch {
-      // Curator may not be available - fail silently
-    }
-  };
-
-  const toggleSacred = async (blockLabel: string, sacred: boolean) => {
-    try {
-      await fetch(`${apiUrl}/api/curator/blocks/${agentId}/${blockLabel}/sacred`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sacred }),
-      });
-      fetchCuratorHealth();
-    } catch {
-      // Fail silently
-    }
-  };
-
-  const runCompression = async () => {
-    setCompressing(true);
-    try {
-      const res = await fetch(`${apiUrl}/api/curator/agents/${agentId}/compress`, {
-        method: "POST",
-      });
-      const json = await res.json();
-      if (json.success) {
-        fetchCuratorHealth();
-        // Refresh agent data to get updated blocks
-        useAppStore.getState().loadAgents?.();
-      }
-    } catch {
-      // Fail silently
-    } finally {
-      setCompressing(false);
-    }
-  };
-
-  // Fetch curator health on mount and when agent changes
-  useEffect(() => {
-    fetchCuratorHealth();
-    const interval = setInterval(fetchCuratorHealth, 30000); // Refresh every 30s
-    return () => clearInterval(interval);
-  }, [agentId, apiUrl]);
+  // Calculate memory health from blocks
+  const memoryHealth = calculateMemoryHealth(memoryBlocks);
 
   // Toggle block expansion
   const toggleExpanded = useCallback((blockId: string) => {
@@ -208,7 +126,7 @@ export function AgentMemoryPanel({ agentId, apiUrl = "http://localhost:8283" }: 
   const startEdit = useCallback((block: MemoryBlock) => {
     setEditing({
       blockId: block.id,
-      draftValue: block.value,
+      draftValue: block.value || '',
       isSaving: false,
       error: null,
     });
@@ -232,7 +150,7 @@ export function AgentMemoryPanel({ agentId, apiUrl = "http://localhost:8283" }: 
     if (!block) return;
 
     // Don't save if value hasn't changed
-    if (block.value === editing.draftValue) {
+    if ((block.value || '') === editing.draftValue) {
       cancelEdit();
       return;
     }
@@ -345,57 +263,31 @@ export function AgentMemoryPanel({ agentId, apiUrl = "http://localhost:8283" }: 
         {activeTab === "core" && (
           <>
             {/* Memory Health Indicator */}
-            {memoryHealth && (
-              <div className="mb-4 rounded-xl border border-ink-900/10 bg-surface-secondary p-3">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-medium text-ink-700">Memory Pressure</span>
-                  <span
-                    className={`text-xs font-semibold ${
-                      memoryHealth.overallPressure > 0.85
-                        ? "text-red-500"
-                        : memoryHealth.overallPressure > 0.7
-                        ? "text-orange-500"
-                        : "text-green-500"
-                    }`}
-                  >
-                    {(memoryHealth.overallPressure * 100).toFixed(0)}%
-                  </span>
-                </div>
-                <div className="h-2 w-full rounded-full bg-ink-900/10 overflow-hidden">
-                  <div
-                    className="h-full transition-all duration-300"
-                    style={{
-                      width: `${memoryHealth.overallPressure * 100}%`,
-                      background:
-                        memoryHealth.overallPressure > 0.85
-                          ? "var(--red, #ef4444)"
-                          : memoryHealth.overallPressure > 0.7
-                          ? "var(--orange, #f97316)"
-                          : "var(--green, #22c55e)",
-                    }}
-                  />
-                </div>
-                {memoryHealth.needsAttention && (
-                  <button
-                    onClick={runCompression}
-                    disabled={compressing}
-                    className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-orange-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {compressing ? (
-                      <>
-                        <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                        </svg>
-                        Compressing...
-                      </>
-                    ) : (
-                      "Run Compression"
-                    )}
-                  </button>
-                )}
+            <div className="mb-4 rounded-xl border border-ink-900/10 bg-surface-secondary p-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-medium text-ink-700">Memory Pressure</span>
+                <span
+                  className={`text-xs font-semibold ${
+                    memoryHealth.overallPressure > 0.85
+                      ? "text-red-600"
+                      : memoryHealth.overallPressure > 0.7
+                      ? "text-amber-600"
+                      : "text-green-600"
+                  }`}
+                >
+                  {(memoryHealth.overallPressure * 100).toFixed(0)}%
+                </span>
               </div>
-            )}
+              <MemoryPressureBar pressure={memoryHealth.overallPressure} size="md" showLabel={false} />
+              {memoryHealth.needsAttention && (
+                <div className="mt-3 flex items-center gap-2 text-xs text-amber-600">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                  <span>Memory needs attention</span>
+                </div>
+              )}
+            </div>
 
             {memoryBlocks.length === 0 ? (
               <div className="rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-8 text-center">
@@ -407,11 +299,12 @@ export function AgentMemoryPanel({ agentId, apiUrl = "http://localhost:8283" }: 
                   const tier = classifyTier(block.label);
                   const isExpanded = expandedBlocks.has(block.id);
                   const isEditing = editing.blockId === block.id;
+                  const blockValue = block.value || '';
                   const displayValue = isExpanded
-                    ? block.value
-                    : block.value.length > 100
-                    ? `${block.value.slice(0, 100)}...`
-                    : block.value;
+                    ? blockValue
+                    : blockValue.length > 100
+                    ? `${blockValue.slice(0, 100)}...`
+                    : blockValue;
 
                   return (
                     <div
@@ -435,33 +328,21 @@ export function AgentMemoryPanel({ agentId, apiUrl = "http://localhost:8283" }: 
                               {tier}
                             </span>
                           )}
+                          {/* Block Pressure Indicator */}
+                          {block.limit !== undefined && block.limit > 0 && (
+                            <BlockPressureIndicator block={block} showBar={true} />
+                          )}
                           {/* Sacred Block Toggle */}
-                          {curatorLoaded && (
-                            <button
-                              onClick={() => toggleSacred(block.label, !sacredBlocks.has(block.label))}
-                              className={`text-[10px] font-semibold px-1.5 py-0.5 rounded transition-colors ${
-                                sacredBlocks.has(block.label)
-                                  ? "bg-yellow-500 text-white"
-                                  : "bg-ink-900/10 text-ink-500 hover:bg-ink-900/20"
-                              }`}
-                              title={
-                                sacredBlocks.has(block.label)
-                                  ? "Protected from compression - click to remove"
-                                  : "Click to protect from compression"
-                              }
-                            >
-                              {sacredBlocks.has(block.label) ? "✓ Sacred" : "○ Sacred"}
-                            </button>
-                          )}
-                          {block.limit !== undefined && (
-                            <span className="text-xs text-muted px-1.5 py-0.5 rounded bg-ink-900/5">
-                              Limit: {block.limit}
-                            </span>
-                          )}
+                          <SacredToggle
+                            blockLabel={block.label}
+                            isSacred={isSacred(block.label)}
+                            onToggle={() => toggleSacred(block.label)}
+                            disabled={!sacredLoaded}
+                          />
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
                           {/* Expand/Collapse button */}
-                          {block.value.length > 100 && !isEditing && (
+                          {(block.value || '').length > 100 && !isEditing && (
                             <button
                               onClick={() => toggleExpanded(block.id)}
                               className="rounded-lg p-1.5 text-ink-500 hover:bg-ink-900/10 hover:text-accent transition-colors"
@@ -596,7 +477,7 @@ export function AgentMemoryPanel({ agentId, apiUrl = "http://localhost:8283" }: 
                             >
                               {displayValue}
                             </div>
-                            {!isExpanded && block.value.length > 100 && (
+                            {!isExpanded && (block.value || '').length > 100 && (
                               <button
                                 onClick={() => toggleExpanded(block.id)}
                                 className="mt-2 text-xs text-accent hover:text-accent-hover transition-colors"
@@ -617,6 +498,13 @@ export function AgentMemoryPanel({ agentId, apiUrl = "http://localhost:8283" }: 
 
         {activeTab === "archival" && (
           <div className="flex flex-col gap-4">
+            {/* Error display */}
+            {passageError && (
+              <div className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
+                {passageError}
+              </div>
+            )}
+
             {/* Insert passage */}
             <div className="space-y-2">
               <textarea
@@ -683,31 +571,66 @@ export function AgentMemoryPanel({ agentId, apiUrl = "http://localhost:8283" }: 
                     <pre className="text-xs text-ink-700 font-mono whitespace-pre-wrap break-words leading-relaxed">
                       {passage.text}
                     </pre>
-                    <div className="flex items-center gap-2 mt-2 flex-wrap">
-                      {passage.createdAt && (
-                        <span className="text-xs text-muted">
-                          {new Date(passage.createdAt).toLocaleDateString()}
-                        </span>
-                      )}
-                      {passage.score !== undefined && (
-                        <span className="text-xs text-accent font-medium">
-                          Score: {passage.score.toFixed(3)}
-                        </span>
-                      )}
-                      {passage.tags.length > 0 &&
-                        passage.tags.map((tag) => (
-                          <span
-                            key={tag}
-                            className="text-xs px-1.5 py-0.5 rounded bg-accent/10 text-accent"
-                          >
-                            {tag}
+                    <div className="flex items-center gap-2 mt-2 flex-wrap justify-between">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {passage.createdAt && (
+                          <span className="text-xs text-muted">
+                            {new Date(passage.createdAt).toLocaleDateString()}
                           </span>
-                        ))}
+                        )}
+                        {passage.score !== undefined && (
+                          <span className="text-xs text-accent font-medium">
+                            Score: {passage.score.toFixed(3)}
+                          </span>
+                        )}
+                        {passage.tags.length > 0 &&
+                          passage.tags.map((tag) => (
+                            <span
+                              key={tag}
+                              className="text-xs px-1.5 py-0.5 rounded bg-accent/10 text-accent"
+                            >
+                              {tag}
+                            </span>
+                          ))}
+                      </div>
+                      <button
+                        onClick={() => setPassageToDelete(passage.id)}
+                        className="text-xs text-red-500 hover:text-red-600 px-2 py-1 rounded hover:bg-red-50 transition-colors"
+                        title="Delete passage"
+                      >
+                        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
                     </div>
                   </div>
                 ))
               )}
             </div>
+
+            {/* Delete confirmation modal */}
+            {passageToDelete && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+                <div className="rounded-xl bg-surface p-4 shadow-lg max-w-sm mx-4">
+                  <p className="text-sm text-ink-800 mb-4">Delete this passage from archival memory?</p>
+                  <div className="flex gap-2 justify-end">
+                    <button
+                      onClick={() => setPassageToDelete(null)}
+                      className="px-3 py-1.5 text-xs font-medium rounded-lg bg-surface-tertiary text-ink-600 hover:bg-ink-900/10"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => deletePassage(passageToDelete)}
+                      disabled={isDeleting}
+                      className="px-3 py-1.5 text-xs font-medium rounded-lg bg-red-500 text-white hover:bg-red-600 disabled:opacity-50"
+                    >
+                      {isDeleting ? 'Deleting...' : 'Delete'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
