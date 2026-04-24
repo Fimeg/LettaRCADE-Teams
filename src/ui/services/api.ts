@@ -262,118 +262,6 @@ export const agentsApi = {
 };
 
 // =============================================================================
-// Message API (Streaming)
-// =============================================================================
-
-export const chatApi = {
-  /** Send a message and get full response (non-streaming) */
-  sendMessage: async (agentId: string, content: string) => {
-    const client = getLettaClient();
-    return await client.agents.messages.create(agentId, {
-      messages: [{ role: "user", content }],
-    });
-  },
-
-  /**
-   * Stream agent responses within a conversation.
-   * Uses `client.conversations.messages.create` — the conversation-scoped
-   * endpoint. Pass the conversation id; agent_id is only required for the
-   * magic "default" conversation.
-   */
-  streamMessage: async function* (
-    conversationId: string,
-    content: string,
-    opts: { agentId?: string } = {}
-  ): AsyncGenerator<
-    | { type: "reasoning"; reasoning: string }
-    | { type: "assistant"; content: string }
-    | { type: "tool_call"; name: string; arguments: Record<string, unknown> }
-    | { type: "tool_return"; output: string }
-    | { type: "ping" }
-    | { type: "error"; error_type: string; message: string }
-    | { type: "usage"; stats: unknown },
-    void,
-    unknown
-  > {
-    const client = getLettaClient();
-    const body: Record<string, unknown> = {
-      messages: [{ role: "user", content }],
-      streaming: true,
-    };
-    if (conversationId === "default" && opts.agentId) {
-      body.agent_id = opts.agentId;
-    }
-    const stream = await client.conversations.messages.create(
-      conversationId,
-      body as unknown as Parameters<typeof client.conversations.messages.create>[1],
-    );
-
-    for await (const chunk of stream) {
-      const msg = chunk as Letta.Agents.Messages.LettaStreamingResponse;
-
-      // Check message_type to determine the type of message
-      const messageType = (msg as unknown as { message_type: string }).message_type;
-
-      switch (messageType) {
-        case "reasoning_message":
-          yield { type: "reasoning", reasoning: (msg as Letta.Agents.Messages.ReasoningMessage).reasoning };
-          break;
-        case "assistant_message":
-          const assistantMsg = msg as Letta.Agents.Messages.AssistantMessage;
-          // Content can be string or LettaAssistantMessageContentUnion[]
-          let assistantContent: string;
-          if (typeof assistantMsg.content === "string") {
-            assistantContent = assistantMsg.content;
-          } else if (Array.isArray(assistantMsg.content)) {
-            assistantContent = assistantMsg.content.map(c => {
-              if (typeof c === 'string') return c;
-              if (c && typeof c === 'object' && 'text' in c) return (c as { text?: string }).text || '';
-              return '';
-            }).join('');
-          } else {
-            assistantContent = JSON.stringify(assistantMsg.content);
-          }
-          yield { type: "assistant", content: assistantContent };
-          break;
-        case "tool_call_message":
-          yield {
-            type: "tool_call",
-            name: (msg as unknown as { tool_call?: { name: string } }).tool_call?.name || "unknown",
-            arguments: (msg as unknown as { tool_call?: { arguments: Record<string, unknown> } }).tool_call?.arguments || {},
-          };
-          break;
-        case "tool_return_message":
-          yield { type: "tool_return", output: (msg as Letta.Tools.ToolReturnMessage).tool_return || "" };
-          break;
-        case "ping":
-          yield { type: "ping" };
-          break;
-        case "error_message":
-          yield {
-            type: "error",
-            error_type: (msg as unknown as { error_type?: string }).error_type || "unknown",
-            message: (msg as unknown as { message?: string }).message || "Unknown error",
-          };
-          break;
-        case "usage_statistics":
-          yield { type: "usage", stats: msg };
-          break;
-      }
-    }
-  },
-
-  /** Get message history for a conversation (oldest → newest). */
-  getMessages: async (conversationId: string) => {
-    const client = getLettaClient();
-    const page = await client.conversations.messages.list(conversationId, {
-      limit: 200,
-      order: "asc",
-    } as unknown as Parameters<typeof client.conversations.messages.list>[1]);
-    return page.getPaginatedItems();
-  },
-};
-
-// =============================================================================
 // Conversation API
 // =============================================================================
 
@@ -480,7 +368,6 @@ export const deployApi = {
 
 export const api = {
   ...agentsApi,
-  ...chatApi,
   ...conversationsApi,
 };
 
