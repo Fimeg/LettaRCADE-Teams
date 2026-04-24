@@ -5,6 +5,7 @@ import { useMessageWindow } from "../hooks/useMessageWindow";
 import { useIPC } from "../hooks/useIPC";
 import { useLettaCodeWs, LettaCodeMessage } from "../hooks/useLettaCodeWs";
 import { chatApi, getApiBase } from "../services/api";
+import { slashCommandHandlers } from "../services/slashCommands";
 import type { ClientEvent, ServerEvent, StreamMessage } from "../types";
 import { MessageCard } from "./EventCard";
 import MDContent from "../render/markdown";
@@ -28,9 +29,9 @@ interface SlashCommand {
 }
 
 const SLASH_COMMANDS: SlashCommand[] = [
-  { id: 'doctor', desc: 'Audit and refine memory structure', requires: 'local' },
+  { id: 'doctor', desc: 'Audit and refine memory structure', requires: 'any' },
   { id: 'clear', desc: 'Clear in-context messages', requires: 'any' },
-  { id: 'remember', desc: 'Remember something from conversation', requires: 'local' },
+  { id: 'remember', desc: 'Remember something from conversation', requires: 'any' },
   { id: 'recompile', desc: 'Recompile agent memory', requires: 'any' },
 ];
 
@@ -100,32 +101,45 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
         const apiMessages = await chatApi.getMessages(activeConversationId);
         // Convert API messages to StreamMessage format
         const streamMessages: StreamMessage[] = apiMessages.map((msg): StreamMessage => {
+          // Use type assertions to access Message union properties
+          const msgWithProps = msg as {
+            id?: string;
+            content?: unknown;
+            role?: string;
+            created_at?: string | number;
+          };
+
           // Handle different content formats
           let content = '';
-          if (typeof msg.content === 'string') {
-            content = msg.content;
-          } else if (msg.content && typeof msg.content === 'object') {
-            if ('text' in msg.content && typeof msg.content.text === 'string') {
-              content = msg.content.text;
-            } else if (Array.isArray(msg.content)) {
+          if (typeof msgWithProps.content === 'string') {
+            content = msgWithProps.content;
+          } else if (msgWithProps.content && typeof msgWithProps.content === 'object') {
+            const contentObj = msgWithProps.content as { text?: string; [key: string]: unknown };
+            if ('text' in contentObj && typeof contentObj.text === 'string') {
+              content = contentObj.text;
+            } else if (Array.isArray(msgWithProps.content)) {
               // Handle array format (e.g., content blocks)
-              content = msg.content
-                .filter(c => c.type === 'text' || typeof c.text === 'string')
-                .map(c => c.text || '')
+              interface ContentBlock {
+                type?: string;
+                text?: string;
+              }
+              content = msgWithProps.content
+                .filter((c: ContentBlock) => c.type === 'text' || typeof c.text === 'string')
+                .map((c: ContentBlock) => c.text || '')
                 .join('');
             }
           }
 
           const baseMessage = {
-            uuid: msg.id,
-            createdAt: msg.created_at ? new Date(msg.created_at).getTime() : Date.now(),
+            uuid: msgWithProps.id || `msg-${Date.now()}`,
+            createdAt: msgWithProps.created_at ? new Date(msgWithProps.created_at).getTime() : Date.now(),
           };
 
-          if (msg.role === 'user') {
+          if (msgWithProps.role === 'user') {
             return { ...baseMessage, type: 'user_prompt' as const, prompt: content };
-          } else if (msg.role === 'assistant') {
+          } else if (msgWithProps.role === 'assistant') {
             return { ...baseMessage, type: 'assistant' as const, content };
-          } else if (msg.role === 'system') {
+          } else if (msgWithProps.role === 'system') {
             return { ...baseMessage, type: 'system' as const, content };
           } else {
             // Default to assistant for unknown roles
@@ -320,47 +334,6 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [resetToLatest]);
 
-  const handleSendMessage = useCallback(() => {
-    setShouldAutoScroll(true);
-    setHasNewMessages(false);
-    resetToLatest();
-  }, [resetToLatest]);
-
-  // Handle sending input with slash command detection
-  const handleInputSend = useCallback(async () => {
-    if (!inputValue.trim() || !activeConversationId) return;
-
-    const userMsg = inputValue.trim();
-    setInputValue('');
-    setShowSlashCommands(false);
-    setShouldAutoScroll(true);
-    setHasNewMessages(false);
-    resetToLatest();
-
-    // Check for slash command
-    if (userMsg.startsWith('/')) {
-      const [cmd, ...args] = userMsg.slice(1).split(/\s+/);
-      await handleSlashCommand(cmd, args.join(' '));
-      return;
-    }
-
-    // Regular message - send via IPC
-    sendEvent({
-      type: 'session.continue',
-      payload: {
-        sessionId: activeConversationId,
-        prompt: userMsg,
-      }
-    });
-  }, [inputValue, activeConversationId, handleSlashCommand, resetToLatest, sendEvent]);
-
-  // Handle slash command
-  const handleCommand = useCallback((command: string) => {
-    setShowCommands(false);
-    // TODO: Implement command handling
-    console.log("Command:", command);
-  }, []);
-
   // ═══ SLASH COMMAND HANDLERS ═══
 
   const handleSlashCommand = useCallback(async (cmd: string, args: string) => {
@@ -399,47 +372,65 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
     }
 
     // Execute via appropriate path
-    if (connectionMode === 'local' && lettaCodeStatus === 'connected' && activeConversationId) {
-      // Send via letta-code WebSocket
+    if (connectionMode === 'local' && lettaCodeStatus === 'connected' && executeCommand) {
+      // Local mode - send via letta-code WebSocket
       setMessages(prev => [...prev, {
-        uuid: `system-${Date.now()}`,
+        uuid: `cmd-${Date.now()}`,
         createdAt: Date.now(),
         type: 'system' as const,
         content: `Running /${cmd}...`,
       }]);
 
-      const success = executeCommand({
+      executeCommand({
         commandId: cmd,
         agentId,
-        conversationId: activeConversationId,
+        conversationId: activeConversationId || undefined,
         args: args || undefined,
       });
-
-      if (!success) {
-        setMessages(prev => [...prev, {
-          uuid: `error-${Date.now()}`,
-          createdAt: Date.now(),
-          type: 'system' as const,
-          content: `/${cmd} failed: Could not send to letta-code`,
-        }]);
-      }
-    } else if (connectionMode === 'local') {
-      // Server mode fallback for commands that support it
-      if (cmd === 'recompile' || cmd === 'clear') {
-        await runServerCommand(cmd);
-      } else {
-        setMessages(prev => [...prev, {
-          uuid: `error-${Date.now()}`,
-          createdAt: Date.now(),
-          type: 'system' as const,
-          content: `/${cmd} requires local mode.`,
-        }]);
-      }
+    } else {
+      // Server mode fallback for certain commands
+      await runServerCommand(cmd);
     }
-  }, [connectionMode, lettaCodeStatus, activeConversationId, agentId, executeCommand]);
+  }, [connectionMode, lettaCodeStatus, executeCommand, agentId, activeConversationId]);
 
-  const runServerCommand = useCallback(async (cmd: string) => {
-    if (!activeConversationId) return;
+  // Handle sending input with slash command detection
+  const handleInputSend = useCallback(async () => {
+    if (!inputValue.trim() || !activeConversationId) return;
+
+    const userMsg = inputValue.trim();
+    setInputValue('');
+    setShowSlashCommands(false);
+    setShouldAutoScroll(true);
+    setHasNewMessages(false);
+    resetToLatest();
+
+    // Check for slash command
+    if (userMsg.startsWith('/')) {
+      const [cmd, ...args] = userMsg.slice(1).split(/\s+/);
+      await handleSlashCommand(cmd, args.join(' '));
+      return;
+    }
+
+    // Regular message - send via IPC
+    sendEvent({
+      type: 'session.continue',
+      payload: {
+        sessionId: activeConversationId,
+        prompt: userMsg,
+      }
+    });
+  }, [inputValue, activeConversationId, handleSlashCommand, resetToLatest, sendEvent]);
+
+  const runServerCommand = useCallback(async (cmd: string, args: string = '') => {
+    if (!activeConversationId && cmd !== 'doctor' && cmd !== 'recompile') {
+      setMessages(prev => [...prev, {
+        uuid: `error-${Date.now()}`,
+        createdAt: Date.now(),
+        type: 'system' as const,
+        content: `No active conversation. Cannot run /${cmd}.`,
+      }]);
+      return;
+    }
 
     setMessages(prev => [...prev, {
       uuid: `system-${Date.now()}`,
@@ -449,32 +440,34 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
     }]);
 
     try {
-      // Use the chatApi service - need to add command endpoint
-      const res = await fetch(`/api/commands/${cmd}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId, conversationId: activeConversationId }),
-      });
-      const json = await res.json();
+      const handler = slashCommandHandlers[cmd];
 
-      if (json.success) {
+      if (!handler) {
+        throw new Error(`Unknown command: ${cmd}`);
+      }
+
+      const result = await handler(agentId, activeConversationId, args);
+
+      if (result.success) {
         setMessages(prev => [...prev, {
           uuid: `system-${Date.now()}`,
           createdAt: Date.now(),
           type: 'system' as const,
-          content: `/${cmd} completed: ${json.message || 'OK'}`,
+          content: `/${cmd} completed: ${result.message}`,
         }]);
 
-        if (cmd === 'clear') {
-          // Reload messages after clear
+        if (result.action === 'clear_messages') {
           setMessages([]);
+          loadAgent(agentId);
+        } else if (result.action === 'reload_agent') {
+          loadAgent(agentId);
         }
       } else {
         setMessages(prev => [...prev, {
           uuid: `error-${Date.now()}`,
           createdAt: Date.now(),
           type: 'system' as const,
-          content: `/${cmd} failed: ${json.error || 'Unknown error'}`,
+          content: `/${cmd} failed: ${result.message}`,
         }]);
       }
     } catch (err: any) {
@@ -485,7 +478,7 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
         content: `/${cmd} error: ${err.message}`,
       }]);
     }
-  }, [agentId, activeConversationId, setMessages]);
+  }, [agentId, activeConversationId, setMessages, loadAgent]);
 
   // Get display model name
   const getModelDisplay = (model: string) => {
@@ -615,12 +608,12 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
         <PanelResizeHandle className="w-1 bg-ink-900/10 hover:bg-accent/50 transition-colors" />
 
         {/* Center: Chat Panel */}
-        <Panel defaultSize={50} minSize={30}>
-          <div className="h-full flex flex-col bg-surface-cream">
+        <Panel defaultSize={50} minSize={30} maxSize={70}>
+          <div className="h-full flex flex-col bg-surface-cream relative overflow-hidden">
             <div
               ref={scrollContainerRef}
               onScroll={handleScroll}
-              className="flex-1 overflow-y-auto px-6 pb-32 pt-4"
+              className="flex-1 overflow-y-auto px-6 pb-4 pt-4"
             >
               <div className="mx-auto max-w-3xl">
                 <div ref={topSentinelRef} className="h-1" />
@@ -699,8 +692,8 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
             </div>
 
             {/* Input with slash command autocomplete */}
-            <div className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-surface via-surface to-transparent pb-6 px-2 lg:pb-8 pt-8 lg:ml-[280px]">
-              <div className="mx-auto w-full max-w-full lg:max-w-3xl">
+            <div className="flex-shrink-0 bg-gradient-to-t from-surface via-surface to-transparent p-4">
+              <div className="mx-auto w-full max-w-3xl">
                 {/* Slash command autocomplete */}
                 {showSlashCommands && inputValue.startsWith('/') && (
                   <div className="mb-2 bg-surface border border-ink-900/10 rounded-lg shadow-lg py-1 max-h-48 overflow-y-auto">
@@ -776,7 +769,7 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
             {hasNewMessages && (
               <button
                 onClick={scrollToBottom}
-                className="fixed bottom-28 left-1/2 z-40 -translate-x-1/2 flex items-center gap-2 rounded-full bg-accent px-4 py-2 text-sm font-medium text-white shadow-lg transition-all hover:bg-accent-hover hover:scale-105"
+                className="absolute bottom-24 left-1/2 z-40 -translate-x-1/2 flex items-center gap-2 rounded-full bg-accent px-4 py-2 text-sm font-medium text-white shadow-lg transition-all hover:bg-accent-hover hover:scale-105"
               >
                 <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M12 5v14M5 12l7 7 7-7" />
