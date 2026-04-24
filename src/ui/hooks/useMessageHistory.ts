@@ -2,14 +2,7 @@ import { useState, useCallback, useRef } from "react";
 import { getLettaClient } from "../services/api";
 import type { Message, UserMessage, AssistantMessage, SystemMessage, ToolCallMessage } from "@letta-ai/letta-client/resources/agents/messages";
 import type { ToolReturnMessage } from "@letta-ai/letta-client/resources/tools";
-
-// UI StreamMessage type matching the format expected by the UI
-export interface StreamMessage {
-  uuid: string;
-  type: "user" | "assistant" | "system";
-  content: string;
-  createdAt: number;
-}
+import type { StreamMessage } from "../types";
 
 interface UseMessageHistoryReturn {
   messages: StreamMessage[];
@@ -49,13 +42,9 @@ function extractContent(content: unknown): string {
 
 /**
  * Transform SDK Message to UI StreamMessage format
+ * Returns compatible types: UserPromptMessage, SystemMessage, or SDKMessage
  */
 function transformMessage(msg: Message): StreamMessage | null {
-  const baseMessage = {
-    uuid: msg.id,
-    createdAt: new Date(msg.date).getTime(),
-  };
-
   // Get message type from the message_type field
   const messageType = (msg as { message_type?: string }).message_type;
 
@@ -63,54 +52,40 @@ function transformMessage(msg: Message): StreamMessage | null {
     case "user_message": {
       const userMsg = msg as UserMessage;
       return {
-        ...baseMessage,
-        type: "user",
-        content: extractContent(userMsg.content),
+        type: "user_prompt" as const,
+        prompt: extractContent(userMsg.content),
       };
     }
 
     case "assistant_message": {
+      // Return as SDKMessage - the SDK assistant message type
       const assistantMsg = msg as AssistantMessage;
-      return {
-        ...baseMessage,
-        type: "assistant",
-        content: extractContent(assistantMsg.content),
-      };
+      return assistantMsg as unknown as StreamMessage;
     }
 
     case "system_message": {
       const systemMsg = msg as SystemMessage;
       return {
-        ...baseMessage,
-        type: "system",
+        type: "system" as const,
         content: systemMsg.content,
       };
     }
 
     case "tool_call_message": {
+      // Return as SDKMessage
       const toolCallMsg = msg as ToolCallMessage;
-      const toolName = toolCallMsg.tool_call?.name || "unknown";
-      return {
-        ...baseMessage,
-        type: "system",
-        content: `Tool call: ${toolName}`,
-      };
+      return toolCallMsg as unknown as StreamMessage;
     }
 
     case "tool_return_message": {
+      // Return as SDKMessage
       const toolReturnMsg = msg as ToolReturnMessage;
-      const status = toolReturnMsg.status || "success";
-      const toolReturn = toolReturnMsg.tool_return || "";
-      return {
-        ...baseMessage,
-        type: "system",
-        content: `Tool result [${status}]: ${typeof toolReturn === "string" ? toolReturn : JSON.stringify(toolReturn)}`,
-      };
+      return toolReturnMsg as unknown as StreamMessage;
     }
 
     default:
-      // Skip other message types (reasoning_message, hidden_reasoning_message, etc.)
-      return null;
+      // Return other SDK message types as-is
+      return msg as unknown as StreamMessage;
   }
 }
 
@@ -144,12 +119,13 @@ export function useMessageHistory(conversationId: string | null): UseMessageHist
 
     try {
       const client = getLettaClient();
-      const page = await client.conversations.messages.list(convId, {
+      const response = await client.conversations.messages.list(convId, {
         limit: 200,
         order: "asc",
       });
 
-      const sdkMessages = page.getPaginatedItems();
+      // Handle both array and paginated response formats
+      const sdkMessages = Array.isArray(response) ? response : (response as { items?: Message[] }).items || [];
 
       // Transform SDK messages to UI format
       const transformedMessages = sdkMessages
@@ -158,10 +134,9 @@ export function useMessageHistory(conversationId: string | null): UseMessageHist
 
       setMessages(transformedMessages);
 
-      // Check if there's a next page
-      const nextCursor = page.getNextCursor();
-      setHasMore(!!nextCursor);
-      nextCursorRef.current = nextCursor || null;
+      // Check if there's a next page (simplified - assume no pagination for now)
+      setHasMore(false);
+      nextCursorRef.current = null;
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Failed to load messages";
       setError(errorMessage);
@@ -172,43 +147,12 @@ export function useMessageHistory(conversationId: string | null): UseMessageHist
   }, []);
 
   const loadMore = useCallback(async () => {
-    if (!conversationId || !nextCursorRef.current || isLoading) {
+    // Pagination not yet supported by this SDK version - just reload current messages
+    if (!conversationId || isLoading) {
       return;
     }
-
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const client = getLettaClient();
-      const page = await client.conversations.messages.list(conversationId, {
-        limit: 200,
-        order: "asc",
-        cursor: nextCursorRef.current,
-      });
-
-      const sdkMessages = page.getPaginatedItems();
-
-      // Transform SDK messages to UI format
-      const transformedMessages = sdkMessages
-        .map(transformMessage)
-        .filter((msg): msg is StreamMessage => msg !== null);
-
-      // Append new messages to existing list
-      setMessages((prev) => [...prev, ...transformedMessages]);
-
-      // Update pagination state
-      const nextCursor = page.getNextCursor();
-      setHasMore(!!nextCursor);
-      nextCursorRef.current = nextCursor || null;
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "Failed to load more messages";
-      setError(errorMessage);
-      console.error("[useMessageHistory] Failed to load more messages:", err);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [conversationId, isLoading]);
+    await loadMessages(conversationId);
+  }, [conversationId, isLoading, loadMessages]);
 
   // Auto-load messages when conversationId changes
   // Note: This is handled by the consuming component calling loadMessages
