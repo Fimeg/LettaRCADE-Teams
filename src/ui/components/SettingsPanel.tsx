@@ -11,7 +11,7 @@ export function SettingsPanel() {
 
   // Load saved URL on mount
   useEffect(() => {
-    const saved = localStorage.getItem(API_BASE_KEY) || import.meta.env.VITE_API_URL || 'http://10.10.20.19:3000';
+    const saved = localStorage.getItem(API_BASE_KEY) || import.meta.env.VITE_API_URL || 'http://localhost:8283';
     setApiUrl(saved);
   }, []);
 
