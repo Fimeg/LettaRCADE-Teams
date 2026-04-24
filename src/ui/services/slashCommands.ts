@@ -84,11 +84,14 @@ const rememberCommand: SlashCommandExecutor = async (agentId, _conversationId, a
   }
 
   try {
-    const passage = await agentsApi.createPassage(agentId, args.trim());
-
+    const result = await agentsApi.createPassage(agentId, args.trim());
+    // SDK may return a single passage or a list; extract id defensively.
+    const first = Array.isArray(result) ? result[0] : result;
+    const id = (first as { id?: string } | undefined)?.id ?? '';
+    const suffix = id ? ` (passage ${id.slice(0, 8)})` : '';
     return {
       success: true,
-      message: `Stored to archival memory (passage ${passage.id.slice(0, 8)})`,
+      message: `Stored to archival memory${suffix}`,
     };
   } catch (error) {
     return {
@@ -99,21 +102,37 @@ const rememberCommand: SlashCommandExecutor = async (agentId, _conversationId, a
 };
 
 /**
- * /recompile - Update agent with refreshed config
- * Triggers agent update to refresh memory compilation
+ * /recompile - Force agent memory recompilation
+ * Re-saves each memory block with its current value. The server recomputes
+ * the compiled system prompt on block write, so this triggers a refresh
+ * without changing any user-visible content.
  */
 const recompileCommand: SlashCommandExecutor = async (agentId) => {
   try {
-    const agent = await agentsApi.getAgent(agentId);
+    const blocks = await agentsApi.getMemoryBlocks(agentId);
+    if (blocks.length === 0) {
+      return { success: false, message: 'No memory blocks to recompile.' };
+    }
 
-    await agentsApi.updateAgent(agentId, {
-      name: agent.name,
-      description: agent.description,
-    });
+    let rewritten = 0;
+    for (const block of blocks) {
+      if (!block.label) continue;
+      const existing = (block as { content?: unknown; value?: unknown });
+      let text = '';
+      if (typeof existing.content === 'string') {
+        text = existing.content;
+      } else if (existing.content && typeof existing.content === 'object' && 'text' in existing.content) {
+        text = String((existing.content as { text?: unknown }).text ?? '');
+      } else if (typeof existing.value === 'string') {
+        text = existing.value;
+      }
+      await agentsApi.updateMemoryBlock(agentId, block.label, text);
+      rewritten++;
+    }
 
     return {
       success: true,
-      message: 'Agent memory recompiled successfully',
+      message: `Recompiled ${rewritten} memory block${rewritten === 1 ? '' : 's'}`,
       action: 'reload_agent',
     };
   } catch (error) {

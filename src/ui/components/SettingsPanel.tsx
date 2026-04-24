@@ -1,40 +1,94 @@
 import { useState, useEffect } from 'react';
 import { useAppStore } from '../store/useAppStore';
+import { resetClient } from '../services/api';
 
 const API_BASE_KEY = 'letta_api_url';
+const API_KEY_STORAGE = 'letta_api_key';
 
 export function SettingsPanel() {
   const [apiUrl, setApiUrl] = useState('');
+  const [apiKey, setApiKey] = useState('');
   const [saved, setSaved] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const serverConnected = useAppStore((s) => s.serverConnected);
   const setServerConnected = useAppStore((s) => s.setServerConnected);
 
-  // Load saved URL on mount
+  // Load saved URL on mount. Prefer electron config (authoritative for the
+  // spawn proxy); fall back to localStorage for browser-only builds.
   useEffect(() => {
-    const saved = localStorage.getItem(API_BASE_KEY) || import.meta.env.VITE_API_URL || 'http://localhost:8283';
-    setApiUrl(saved);
+    (async () => {
+      const savedUrl = localStorage.getItem(API_BASE_KEY);
+      const savedKey = localStorage.getItem(API_KEY_STORAGE) || '';
+      if (typeof window !== 'undefined' && window.electron?.getConfig) {
+        try {
+          const cfg = await window.electron.getConfig();
+          setApiUrl(savedUrl || cfg.serverUrl || '');
+          setApiKey(savedKey || cfg.apiKey || '');
+          return;
+        } catch { /* fall through to localStorage */ }
+      }
+      setApiUrl(savedUrl || '');
+      setApiKey(savedKey);
+    })();
   }, []);
 
   const handleSave = async () => {
     localStorage.setItem(API_BASE_KEY, apiUrl);
+    localStorage.setItem(API_KEY_STORAGE, apiKey);
+
+    // Persist to electron config so the main-process proxy uses the same
+    // upstream. Without this the spawned letta-code subprocess would target
+    // whatever default lives in config.ts, not what the user typed here.
+    if (typeof window !== 'undefined' && window.electron?.saveConfig) {
+      try {
+        await window.electron.saveConfig({
+          serverUrl: apiUrl || 'http://localhost:8283',
+          apiKey: apiKey || undefined,
+        });
+      } catch (err) {
+        console.error('[SettingsPanel] failed to sync config to electron:', err);
+      }
+    }
+
     setSaved(true);
-
-    // Re-check connection with new URL
+    resetClient();
     await handleTest();
-
     setTimeout(() => setSaved(false), 2000);
   };
 
   const handleTest = async () => {
+    setTestResult(null);
     try {
-      const res = await fetch(`${apiUrl}/api/agents`, { method: 'HEAD' });
-      if (res.ok) {
+      // In browser dev mode with no custom URL, use relative path (Vite proxy)
+      const isBrowserDev = typeof window !== 'undefined' && !window.electron;
+      const isUsingProxy = isBrowserDev && !localStorage.getItem(API_BASE_KEY);
+
+      // Use /v1/agents/ endpoint (Letta doesn't have /health)
+      const testUrl = isUsingProxy
+        ? '/v1/agents/'
+        : `${apiUrl.replace(/\/$/, '')}/v1/agents/`;
+
+      const res = await fetch(testUrl, {
+        method: 'GET',
+        headers: apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {},
+      });
+
+      if (res.ok || res.status === 200) {
         setServerConnected(true);
+        setTestResult({
+          success: true,
+          message: 'Connected to Letta server!'
+        });
       } else {
         setServerConnected(false);
+        setTestResult({ success: false, message: `Server returned ${res.status}` });
       }
-    } catch {
+    } catch (err) {
       setServerConnected(false);
+      setTestResult({
+        success: false,
+        message: err instanceof Error ? err.message : 'Connection failed'
+      });
     }
   };
 
@@ -55,21 +109,37 @@ export function SettingsPanel() {
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-ink-700 mb-1">
-                API URL
+                Letta Server URL
               </label>
               <input
                 type="url"
                 value={apiUrl}
                 onChange={(e) => setApiUrl(e.target.value)}
-                placeholder="http://localhost:3000"
+                placeholder="http://localhost:8283"
                 className="w-full px-3 py-2 bg-surface border border-ink-900/10 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent/50"
               />
               <p className="text-xs text-ink-500 mt-1">
-                The URL of your Letta Community ADE server
+                Your Letta server address (e.g., http://10.10.20.19:8283)
               </p>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div>
+              <label className="block text-sm font-medium text-ink-700 mb-1">
+                API Key (optional)
+              </label>
+              <input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="Leave empty if not required"
+                className="w-full px-3 py-2 bg-surface border border-ink-900/10 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent/50"
+              />
+              <p className="text-xs text-ink-500 mt-1">
+                Required for cloud (letta.com), optional for local servers
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3 flex-wrap">
               <button
                 onClick={handleSave}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
@@ -86,7 +156,29 @@ export function SettingsPanel() {
               >
                 Test Connection
               </button>
+              <button
+                onClick={() => {
+                  localStorage.removeItem(API_BASE_KEY);
+                  localStorage.removeItem(API_KEY_STORAGE);
+                  setApiUrl('');
+                  setApiKey('');
+                  resetClient();
+                  setTestResult({ success: true, message: 'Reset to default (Vite proxy). Reloading...' });
+                  setTimeout(() => location.reload(), 1000);
+                }}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-ink-500 hover:text-ink-700 hover:bg-ink-50 transition-colors"
+              >
+                Reset to Default
+              </button>
             </div>
+
+            {testResult && (
+              <div className={`text-sm px-3 py-2 rounded-lg ${
+                testResult.success ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
+              }`}>
+                {testResult.message}
+              </div>
+            )}
 
             <div className="flex items-center gap-2 text-sm">
               <span>Status:</span>

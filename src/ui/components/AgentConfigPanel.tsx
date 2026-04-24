@@ -55,8 +55,7 @@ export function AgentConfigPanel({ agentId }: AgentConfigPanelProps) {
 
     try {
       // For now, just update local state. Full API integration requires backend support
-      updateAgent({
-        ...agent,
+      await updateAgent(agentId, {
         systemMessage: draftSystemMessage,
         updatedAt: Date.now(),
       });

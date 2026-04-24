@@ -1,16 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
+import { Panel, Group as PanelGroup, Separator as Separator } from "react-resizable-panels";
 import { useAppStore } from "../store/useAppStore";
 import { useMessageWindow } from "../hooks/useMessageWindow";
 import { useIPC } from "../hooks/useIPC";
-import { useLettaCodeWs, LettaCodeMessage } from "../hooks/useLettaCodeWs";
-import { chatApi, getApiBase } from "../services/api";
+import { agentsApi, chatApi } from "../services/api";
 import { slashCommandHandlers } from "../services/slashCommands";
 import type { ClientEvent, ServerEvent, StreamMessage } from "../types";
 import { MessageCard } from "./EventCard";
 import MDContent from "../render/markdown";
 import { AgentMemoryPanel } from "./AgentMemoryPanel";
-import { AgentConfigPanel } from "./AgentConfigPanel";
 import ConnectionModeIndicator, { ConnectionMode } from "./ConnectionModeIndicator";
 
 const SCROLL_THRESHOLD = 50;
@@ -25,23 +23,71 @@ interface AgentWorkspaceProps {
 interface SlashCommand {
   id: string;
   desc: string;
-  requires: 'local' | 'any';
 }
 
 const SLASH_COMMANDS: SlashCommand[] = [
-  { id: 'doctor', desc: 'Audit and refine memory structure', requires: 'any' },
-  { id: 'clear', desc: 'Clear in-context messages', requires: 'any' },
-  { id: 'remember', desc: 'Remember something from conversation', requires: 'any' },
-  { id: 'recompile', desc: 'Recompile agent memory', requires: 'any' },
+  { id: 'doctor', desc: 'Audit and refine memory structure' },
+  { id: 'clear', desc: 'Clear in-context messages' },
+  { id: 'remember', desc: 'Remember something from conversation' },
+  { id: 'recompile', desc: 'Recompile agent memory' },
 ];
 
-export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspaceProps) {
+// ═══ Settings Tabs ═══
+type SettingsTab = 'config' | 'system' | 'tools';
+
+// ═══ Tool Info ═══
+interface ToolInfo {
+  id: string;
+  name: string;
+  description: string | null;
+  sourceType?: string | null;
+  tags?: string[];
+}
+
+export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: AgentWorkspaceProps) {
   // Store integration
   const agent = useAppStore((s) => s.agents[agentId]);
   const loadAgent = useAppStore((s) => s.loadAgent);
+  const updateAgent = useAppStore((s) => s.updateAgent);
   const activeConversationId = useAppStore((s) => s.activeConversationId);
   const setActiveConversationId = useAppStore((s) => s.setActiveConversationId);
+  const createConversation = useAppStore((s) => s.createConversation);
+  const deleteAgent = useAppStore((s) => s.deleteAgent);
   const handleServerEvent = useAppStore((s) => s.handleServerEvent);
+
+  // Settings panel state
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('config');
+  const [savingConfig, setSavingConfig] = useState(false);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [editingSystem, setEditingSystem] = useState(false);
+  const [systemDraft, setSystemDraft] = useState('');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  // Config form fields
+  const [cfgName, setCfgName] = useState('');
+  const [cfgDesc, setCfgDesc] = useState('');
+  const [cfgModel, setCfgModel] = useState('');
+  const [cfgEmbedding, setCfgEmbedding] = useState('');
+  const [cfgContextWindow, setCfgContextWindow] = useState('');
+  const [cfgMaxTokens, setCfgMaxTokens] = useState('');
+  const [cfgEnableReasoner, setCfgEnableReasoner] = useState(false);
+  const [cfgMaxReasoningTokens, setCfgMaxReasoningTokens] = useState('');
+  const [cfgEffort, setCfgEffort] = useState('');
+  const [cfgFreqPenalty, setCfgFreqPenalty] = useState('');
+  const [cfgParallelToolCalls, setCfgParallelToolCalls] = useState(false);
+  const [cfgSleeptime, setCfgSleeptime] = useState(false);
+  const [cfgAutoclear, setCfgAutoclear] = useState(false);
+  const [cfgTags, setCfgTags] = useState('');
+  const [cfgModelEndpoint, setCfgModelEndpoint] = useState('');
+
+  // Tools state
+  const [agentTools, setAgentTools] = useState<ToolInfo[]>([]);
+  const [allTools, setAllTools] = useState<ToolInfo[]>([]);
+  const [loadingTools, setLoadingTools] = useState(false);
+  const [showToolBrowser, setShowToolBrowser] = useState(false);
+  const [toolFilter, setToolFilter] = useState('');
+  const [toolActionPending, setToolActionPending] = useState<string | null>(null);
 
   // Chat state
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -57,28 +103,20 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
   const shouldRestoreScrollRef = useRef(false);
   const prevMessagesLengthRef = useRef(0);
 
-  // Connection mode for slash commands
+  // Connection mode
   const [connectionMode, setConnectionMode] = useState<ConnectionMode>('server');
-  const [lettaCodeUrl, setLettaCodeUrl] = useState('ws://localhost:8283/ws');
 
-  // Input state for slash commands
+  // Input state
   const [inputValue, setInputValue] = useState('');
   const [showSlashCommands, setShowSlashCommands] = useState(false);
 
-  // Letta-code WebSocket connection
-  const {
-    status: lettaCodeStatus,
-    deviceStatus,
-    subscribe: subscribeLettaCode,
-    connect: connectLettaCode,
-    disconnect: disconnectLettaCode,
-    executeCommand,
-  } = useLettaCodeWs(connectionMode === 'local' ? lettaCodeUrl : null);
-
-  // API-loaded messages state
+  // API-loaded messages
   const [messages, setMessages] = useState<StreamMessage[]>([]);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [messagesError, setMessagesError] = useState<string | null>(null);
+
+  // Streaming state
+  const [isStreaming, setIsStreaming] = useState(false);
 
   // Load agent if not loaded
   useEffect(() => {
@@ -87,7 +125,22 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
     }
   }, [agentId, agent?.loaded, loadAgent]);
 
-  // Load messages from API when conversation changes
+  // Populate form when agent loads
+  useEffect(() => {
+    if (agent?.raw) {
+      populateConfigForm(agent.raw);
+      setSystemDraft(String(agent.raw.system ?? ''));
+    }
+  }, [agent?.raw]);
+
+  // Load agent tools
+  useEffect(() => {
+    if (agentId && settingsTab === 'tools') {
+      loadAgentTools();
+    }
+  }, [agentId, settingsTab]);
+
+  // Load messages when conversation changes
   useEffect(() => {
     if (!activeConversationId) {
       setMessages([]);
@@ -98,10 +151,8 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
       setIsLoadingMessages(true);
       setMessagesError(null);
       try {
-        const apiMessages = await chatApi.getMessages(activeConversationId);
-        // Convert API messages to StreamMessage format
+        const apiMessages = await chatApi.getMessages(agentId);
         const streamMessages: StreamMessage[] = apiMessages.map((msg): StreamMessage => {
-          // Use type assertions to access Message union properties
           const msgWithProps = msg as {
             id?: string;
             content?: unknown;
@@ -109,7 +160,6 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
             created_at?: string | number;
           };
 
-          // Handle different content formats
           let content = '';
           if (typeof msgWithProps.content === 'string') {
             content = msgWithProps.content;
@@ -118,7 +168,6 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
             if ('text' in contentObj && typeof contentObj.text === 'string') {
               content = contentObj.text;
             } else if (Array.isArray(msgWithProps.content)) {
-              // Handle array format (e.g., content blocks)
               interface ContentBlock {
                 type?: string;
                 text?: string;
@@ -142,7 +191,6 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
           } else if (msgWithProps.role === 'system') {
             return { ...baseMessage, type: 'system' as const, content };
           } else {
-            // Default to assistant for unknown roles
             return { ...baseMessage, type: 'assistant' as const, content };
           }
         });
@@ -156,7 +204,7 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
     };
 
     loadMessages();
-  }, [activeConversationId]);
+  }, [activeConversationId, agentId]);
 
   // Handle partial messages from stream events
   const handlePartialMessages = useCallback((partialEvent: ServerEvent) => {
@@ -197,12 +245,11 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
     handlePartialMessages(event);
   }, [handleServerEvent, handlePartialMessages]);
 
-  // IPC connection handled at App level
   useIPC(onEvent);
 
-  // Permission requests and running state (managed via IPC/events)
+  // Permission requests (managed via IPC/events)
   const permissionRequests: any[] = [];
-  const isRunning = false;
+  const isRunning = isStreaming;
 
   const {
     visibleMessages,
@@ -213,7 +260,6 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
     totalMessages,
   } = useMessageWindow(messages, permissionRequests, activeConversationId);
 
-  // Combined loading state (initial load or loading more history)
   const isLoadingHistory = isLoadingMessages || isLoadingMoreHistory;
 
   // Scroll handling
@@ -291,42 +337,6 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
     prevMessagesLengthRef.current = messages.length;
   }, [messages, partialMessage, shouldAutoScroll]);
 
-  // Letta-code WebSocket events
-  useEffect(() => {
-    if (connectionMode !== 'local' || lettaCodeStatus !== 'connected') return;
-
-    const unsubscribe = subscribeLettaCode((msg: LettaCodeMessage) => {
-      // Handle stream_delta for command responses
-      if (msg.type === 'stream_delta' && msg.delta) {
-        const delta = msg.delta;
-        if (delta.message_type === 'assistant_message') {
-          const text = delta.content || '';
-          setMessages(prev => {
-            const last = prev[prev.length - 1];
-            if (last && last.type === 'assistant' && last.uuid === delta.id) {
-              return [...prev.slice(0, -1), { ...last, content: last.content + text }];
-            }
-            return [...prev, {
-              uuid: delta.id || `msg-${Date.now()}`,
-              createdAt: Date.now(),
-              type: 'assistant',
-              content: text,
-            }];
-          });
-        } else if (delta.message_type === 'reasoning_message') {
-          setMessages(prev => [...prev, {
-            uuid: `reasoning-${Date.now()}`,
-            createdAt: Date.now(),
-            type: 'system',
-            content: delta.reasoning || '',
-          }]);
-        }
-      }
-    });
-
-    return () => { if (unsubscribe) unsubscribe(); };
-  }, [connectionMode, lettaCodeStatus, subscribeLettaCode]);
-
   const scrollToBottom = useCallback(() => {
     setShouldAutoScroll(true);
     setHasNewMessages(false);
@@ -334,11 +344,191 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [resetToLatest]);
 
+  // ═══ CONFIG FORM ═══
+
+  const populateConfigForm = useCallback((r: Record<string, unknown>) => {
+    const llm = (r.llm_config as Record<string, unknown>) || {};
+    setCfgName((r.name as string) || '');
+    setCfgDesc((r.description as string) || '');
+    setCfgModel((r.model as string) || (llm.handle as string) || (llm.model as string) || '');
+    setCfgEmbedding((r.embedding as string) || '');
+    setCfgContextWindow(
+      (r.context_window_limit as number)?.toString() || (llm.context_window as number)?.toString() || ''
+    );
+    setCfgMaxTokens((llm.max_tokens as number)?.toString() || '');
+    setCfgEnableReasoner((llm.enable_reasoner as boolean) || false);
+    setCfgMaxReasoningTokens((llm.max_reasoning_tokens as number)?.toString() || '');
+    setCfgEffort((llm.effort as string) || '');
+    setCfgFreqPenalty((llm.frequency_penalty as number)?.toString() || '');
+    setCfgParallelToolCalls((llm.parallel_tool_calls as boolean) || false);
+    setCfgSleeptime((r.enable_sleeptime as boolean) || false);
+    setCfgAutoclear((r.message_buffer_autoclear as boolean) || false);
+    setCfgTags(((r.tags as string[]) || []).join(', '));
+    setCfgModelEndpoint((llm.model_endpoint as string) || '');
+  }, []);
+
+  const saveConfig = async () => {
+    if (!agent?.raw) return;
+    setSavingConfig(true);
+    setSaveMessage(null);
+    try {
+      const r = agent.raw;
+      const llm = (r.llm_config as Record<string, unknown>) || {};
+
+      const updates: Record<string, unknown> = {};
+
+      if (cfgName !== ((r.name as string) || '')) updates.name = cfgName;
+      if (cfgDesc !== ((r.description as string) || '')) updates.description = cfgDesc || null;
+      if (cfgModel !== ((r.model as string) || (llm.handle as string) || (llm.model as string) || '')) {
+        updates.model = cfgModel || null;
+      }
+      if (cfgEmbedding !== ((r.embedding as string) || '')) updates.embedding = cfgEmbedding || null;
+      if (cfgSleeptime !== ((r.enable_sleeptime as boolean) || false)) updates.enable_sleeptime = cfgSleeptime;
+      if (cfgAutoclear !== ((r.message_buffer_autoclear as boolean) || false)) {
+        updates.message_buffer_autoclear = cfgAutoclear;
+      }
+
+      const newTags = cfgTags.split(',').map(t => t.trim()).filter(Boolean);
+      const oldTags = ((r.tags as string[]) || []).join(', ');
+      if (cfgTags !== oldTags) updates.tags = newTags;
+
+      const cwl = cfgContextWindow ? parseInt(cfgContextWindow) : null;
+      if (cwl !== ((r.context_window_limit as number) || null)) updates.context_window_limit = cwl;
+
+      const llmUpdates: Record<string, unknown> = {};
+      const mt = cfgMaxTokens ? parseInt(cfgMaxTokens) : null;
+      if (mt !== ((llm.max_tokens as number) || null)) llmUpdates.max_tokens = mt;
+      if (cfgEnableReasoner !== ((llm.enable_reasoner as boolean) || false)) llmUpdates.enable_reasoner = cfgEnableReasoner;
+      const mrt = cfgMaxReasoningTokens ? parseInt(cfgMaxReasoningTokens) : undefined;
+      if (mrt !== ((llm.max_reasoning_tokens as number) || undefined)) llmUpdates.max_reasoning_tokens = mrt;
+      if (cfgEffort !== ((llm.effort as string) || '')) llmUpdates.effort = cfgEffort || null;
+      const fp = cfgFreqPenalty ? parseFloat(cfgFreqPenalty) : null;
+      if (fp !== ((llm.frequency_penalty as number) || null)) llmUpdates.frequency_penalty = fp;
+      if (cfgParallelToolCalls !== ((llm.parallel_tool_calls as boolean) || false)) {
+        llmUpdates.parallel_tool_calls = cfgParallelToolCalls;
+      }
+      if (cfgModelEndpoint !== ((llm.model_endpoint as string) || '')) llmUpdates.model_endpoint = cfgModelEndpoint || null;
+
+      if (Object.keys(llmUpdates).length > 0) {
+        updates.llm_config = { ...llm, ...llmUpdates };
+      }
+
+      if (Object.keys(updates).length === 0) {
+        setSaveMessage('No changes');
+        setSavingConfig(false);
+        setTimeout(() => setSaveMessage(null), 2000);
+        return;
+      }
+
+      await updateAgent(agentId, updates);
+      setSaveMessage('Saved');
+      loadAgent(agentId);
+      setTimeout(() => setSaveMessage(null), 2000);
+    } catch (err) {
+      setSaveMessage(`Error: ${err instanceof Error ? err.message : 'Failed to save'}`);
+    } finally {
+      setSavingConfig(false);
+    }
+  };
+
+  const saveSystem = async () => {
+    if (!agent?.raw) return;
+    setSavingConfig(true);
+    try {
+      await updateAgent(agentId, { system: systemDraft });
+      setEditingSystem(false);
+      loadAgent(agentId);
+      setSaveMessage('System prompt saved');
+      setTimeout(() => setSaveMessage(null), 2000);
+    } catch (err) {
+      setSaveMessage(`Error: ${err instanceof Error ? err.message : 'Failed to save'}`);
+    } finally {
+      setSavingConfig(false);
+    }
+  };
+
+  const handleDeleteAgent = async () => {
+    setDeleting(true);
+    try {
+      await deleteAgent(agentId);
+      onBack();
+    } catch (err) {
+      setSaveMessage(`Delete failed: ${err instanceof Error ? err.message : 'Failed to delete'}`);
+      setDeleting(false);
+    }
+  };
+
+  // ═══ TOOLS ═══
+
+  const loadAgentTools = async () => {
+    setLoadingTools(true);
+    try {
+      const [attached, all] = await Promise.all([
+        agentsApi.getTools(agentId),
+        agentsApi.listAllTools(),
+      ]);
+      setAgentTools(attached.map(t => ({
+        id: t.id,
+        name: t.name || 'unnamed',
+        description: t.description || null,
+        sourceType: (t as unknown as { source_type?: string }).source_type || null,
+        tags: t.tags || [],
+      })));
+      setAllTools(all.map(t => ({
+        id: t.id,
+        name: t.name || 'unnamed',
+        description: t.description || null,
+        sourceType: (t as unknown as { source_type?: string }).source_type || null,
+        tags: t.tags || [],
+      })));
+    } catch (err) {
+      console.error('Failed to load tools:', err);
+    } finally {
+      setLoadingTools(false);
+    }
+  };
+
+  const attachTool = async (toolId: string) => {
+    setToolActionPending(toolId);
+    try {
+      await agentsApi.attachTool(agentId, toolId);
+      await loadAgentTools();
+    } catch (err) {
+      console.error('Failed to attach tool:', err);
+    } finally {
+      setToolActionPending(null);
+    }
+  };
+
+  const detachTool = async (toolId: string) => {
+    setToolActionPending(toolId);
+    try {
+      await agentsApi.detachTool(agentId, toolId);
+      setAgentTools(prev => prev.filter(t => t.id !== toolId));
+    } catch (err) {
+      console.error('Failed to detach tool:', err);
+    } finally {
+      setToolActionPending(null);
+    }
+  };
+
+  // ═══ CONVERSATIONS ═══
+
+  const handleCreateConversation = async () => {
+    try {
+      const conv = await createConversation(agentId);
+      if (conv) {
+        setActiveConversationId(conv.id);
+      }
+    } catch (err) {
+      console.error('Failed to create conversation:', err);
+    }
+  };
+
   // ═══ SLASH COMMAND HANDLERS ═══
 
-  const handleSlashCommand = useCallback(async (cmd: string, args: string) => {
+  const handleSlashCommand = useCallback(async (cmd: string, args: string = '') => {
     const cmdDef = SLASH_COMMANDS.find(c => c.id === cmd);
-
     if (!cmdDef) {
       setMessages(prev => [...prev, {
         uuid: `error-${Date.now()}`,
@@ -349,79 +539,6 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
       return;
     }
 
-    // Check if command requires local mode
-    if (cmdDef.requires === 'local' && connectionMode !== 'local') {
-      setMessages(prev => [...prev, {
-        uuid: `error-${Date.now()}`,
-        createdAt: Date.now(),
-        type: 'system' as const,
-        content: `/${cmd} requires local mode. Switch to local mode first.`,
-      }]);
-      return;
-    }
-
-    // Check if letta-code is connected for local commands
-    if (cmdDef.requires === 'local' && lettaCodeStatus !== 'connected') {
-      setMessages(prev => [...prev, {
-        uuid: `error-${Date.now()}`,
-        createdAt: Date.now(),
-        type: 'system' as const,
-        content: `/${cmd} requires letta-code connection. Current status: ${lettaCodeStatus}`,
-      }]);
-      return;
-    }
-
-    // Execute via appropriate path
-    if (connectionMode === 'local' && lettaCodeStatus === 'connected' && executeCommand) {
-      // Local mode - send via letta-code WebSocket
-      setMessages(prev => [...prev, {
-        uuid: `cmd-${Date.now()}`,
-        createdAt: Date.now(),
-        type: 'system' as const,
-        content: `Running /${cmd}...`,
-      }]);
-
-      executeCommand({
-        commandId: cmd,
-        agentId,
-        conversationId: activeConversationId || undefined,
-        args: args || undefined,
-      });
-    } else {
-      // Server mode fallback for certain commands
-      await runServerCommand(cmd);
-    }
-  }, [connectionMode, lettaCodeStatus, executeCommand, agentId, activeConversationId]);
-
-  // Handle sending input with slash command detection
-  const handleInputSend = useCallback(async () => {
-    if (!inputValue.trim() || !activeConversationId) return;
-
-    const userMsg = inputValue.trim();
-    setInputValue('');
-    setShowSlashCommands(false);
-    setShouldAutoScroll(true);
-    setHasNewMessages(false);
-    resetToLatest();
-
-    // Check for slash command
-    if (userMsg.startsWith('/')) {
-      const [cmd, ...args] = userMsg.slice(1).split(/\s+/);
-      await handleSlashCommand(cmd, args.join(' '));
-      return;
-    }
-
-    // Regular message - send via IPC
-    sendEvent({
-      type: 'session.continue',
-      payload: {
-        sessionId: activeConversationId,
-        prompt: userMsg,
-      }
-    });
-  }, [inputValue, activeConversationId, handleSlashCommand, resetToLatest, sendEvent]);
-
-  const runServerCommand = useCallback(async (cmd: string, args: string = '') => {
     if (!activeConversationId && cmd !== 'doctor' && cmd !== 'recompile') {
       setMessages(prev => [...prev, {
         uuid: `error-${Date.now()}`,
@@ -441,46 +558,139 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
 
     try {
       const handler = slashCommandHandlers[cmd];
-
-      if (!handler) {
-        throw new Error(`Unknown command: ${cmd}`);
-      }
+      if (!handler) throw new Error(`Unknown command: ${cmd}`);
 
       const result = await handler(agentId, activeConversationId, args);
 
-      if (result.success) {
-        setMessages(prev => [...prev, {
-          uuid: `system-${Date.now()}`,
-          createdAt: Date.now(),
-          type: 'system' as const,
-          content: `/${cmd} completed: ${result.message}`,
-        }]);
+      setMessages(prev => [...prev, {
+        uuid: `${result.success ? 'system' : 'error'}-${Date.now()}`,
+        createdAt: Date.now(),
+        type: 'system' as const,
+        content: result.success
+          ? `/${cmd} completed: ${result.message}`
+          : `/${cmd} failed: ${result.message}`,
+      }]);
 
+      if (result.success) {
         if (result.action === 'clear_messages') {
           setMessages([]);
           loadAgent(agentId);
         } else if (result.action === 'reload_agent') {
           loadAgent(agentId);
         }
-      } else {
-        setMessages(prev => [...prev, {
-          uuid: `error-${Date.now()}`,
-          createdAt: Date.now(),
-          type: 'system' as const,
-          content: `/${cmd} failed: ${result.message}`,
-        }]);
       }
-    } catch (err: any) {
+    } catch (err) {
       setMessages(prev => [...prev, {
         uuid: `error-${Date.now()}`,
         createdAt: Date.now(),
         type: 'system' as const,
-        content: `/${cmd} error: ${err.message}`,
+        content: `/${cmd} error: ${err instanceof Error ? err.message : 'Unknown error'}`,
       }]);
     }
-  }, [agentId, activeConversationId, setMessages, loadAgent]);
+  }, [agentId, activeConversationId, loadAgent]);
 
-  // Get display model name
+  // ═══ MESSAGE SENDING WITH STREAMING ═══
+
+  const handleInputSend = useCallback(async () => {
+    if (!inputValue.trim() || !activeConversationId || isStreaming) return;
+
+    const userMsg = inputValue.trim();
+    setInputValue('');
+    setShowSlashCommands(false);
+    setShouldAutoScroll(true);
+    setHasNewMessages(false);
+    resetToLatest();
+
+    // Check for slash command
+    if (userMsg.startsWith('/')) {
+      const [cmd, ...args] = userMsg.slice(1).split(/\s+/);
+      await handleSlashCommand(cmd, args.join(' '));
+      return;
+    }
+
+    // Add user message to UI immediately
+    setMessages(prev => [...prev, {
+      uuid: `user-${Date.now()}`,
+      createdAt: Date.now(),
+      type: 'user_prompt' as const,
+      prompt: userMsg,
+    }]);
+
+    // Start streaming
+    setIsStreaming(true);
+    setShowPartialMessage(true);
+    partialMessageRef.current = '';
+    setPartialMessage('');
+
+    try {
+      const stream = chatApi.streamMessage(agentId, userMsg);
+      let assistantContent = '';
+
+      for await (const chunk of stream) {
+        switch (chunk.type) {
+          case 'assistant':
+            assistantContent += chunk.content;
+            partialMessageRef.current = assistantContent;
+            setPartialMessage(assistantContent);
+            if (shouldAutoScroll) {
+              messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+            }
+            break;
+          case 'reasoning':
+            setMessages(prev => [...prev, {
+              uuid: `reasoning-${Date.now()}`,
+              createdAt: Date.now(),
+              type: 'reasoning' as const,
+              content: chunk.reasoning,
+            }]);
+            break;
+          case 'tool_call':
+            setMessages(prev => [...prev, {
+              type: 'system' as const,
+              content: `Tool call: ${chunk.name}(${JSON.stringify(chunk.arguments)})`,
+            }]);
+            break;
+          case 'tool_return':
+            setMessages(prev => [...prev, {
+              type: 'system' as const,
+              content: `Tool result: ${chunk.output}`,
+            }]);
+            break;
+          case 'error':
+            setMessages(prev => [...prev, {
+              uuid: `error-${Date.now()}`,
+              createdAt: Date.now(),
+              type: 'system' as const,
+              content: `Error: ${chunk.message}`,
+            }]);
+            break;
+        }
+      }
+
+      // Add final assistant message
+      if (assistantContent) {
+        setMessages(prev => [...prev, {
+          uuid: `assistant-${Date.now()}`,
+          createdAt: Date.now(),
+          type: 'assistant' as const,
+          content: assistantContent,
+        }]);
+      }
+    } catch (err) {
+      setMessages(prev => [...prev, {
+        uuid: `error-${Date.now()}`,
+        createdAt: Date.now(),
+        type: 'system' as const,
+        content: `Stream error: ${err instanceof Error ? err.message : 'Unknown error'}`,
+      }]);
+    } finally {
+      setIsStreaming(false);
+      setShowPartialMessage(false);
+      partialMessageRef.current = '';
+      setPartialMessage('');
+    }
+  }, [inputValue, activeConversationId, isStreaming, handleSlashCommand, resetToLatest, shouldAutoScroll, agentId]);
+
   const getModelDisplay = (model: string) => {
     if (!model) return "Unknown";
     return model.split('/').pop()?.split(':')[0] || model;
@@ -500,10 +710,17 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
     );
   }
 
+  const llm = (agent.raw?.llm_config as Record<string, unknown>) || {};
+  const attachedToolIds = new Set(agentTools.map(t => t.id));
+  const availableTools = allTools.filter(t =>
+    !attachedToolIds.has(t.id) &&
+    (!toolFilter || t.name.toLowerCase().includes(toolFilter.toLowerCase()))
+  );
+
   return (
     <div className="h-full flex flex-col bg-surface">
-      {/* Agent Header */}
-      <header className="flex items-center justify-between h-14 px-4 border-b border-ink-900/10 bg-surface">
+      {/* Header */}
+      <header className="flex items-center justify-between h-14 px-4 border-b border-ink-900/10 bg-surface shrink-0">
         <div className="flex items-center gap-4">
           <button
             onClick={onBack}
@@ -525,23 +742,15 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
             </div>
           </div>
 
-          {/* Model Badge */}
           <span className="px-2 py-0.5 text-xs font-medium bg-accent/10 text-accent rounded">
             {getModelDisplay(agent.model)}
           </span>
         </div>
 
         <div className="flex items-center gap-3">
-          {/* Connection Mode Indicator */}
           <ConnectionModeIndicator
             mode={connectionMode}
             onModeChange={setConnectionMode}
-            lettaCodeStatus={lettaCodeStatus}
-            lettaCodeUrl={lettaCodeUrl}
-            onLettaCodeUrlChange={setLettaCodeUrl}
-            onConnect={connectLettaCode}
-            onDisconnect={disconnectLettaCode}
-            supportedCommands={deviceStatus?.supported_commands}
           />
 
           {/* Conversation Selector */}
@@ -559,6 +768,13 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
             </select>
           )}
 
+          <button
+            onClick={handleCreateConversation}
+            className="px-3 py-1.5 text-sm font-medium text-accent hover:text-accent-hover hover:bg-accent/10 rounded-lg transition-colors"
+          >
+            + New
+          </button>
+
           {/* Slash Commands Dropdown */}
           <div className="relative">
             <button
@@ -569,29 +785,17 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
             </button>
             {showCommands && (
               <div className="absolute right-0 top-full mt-1 w-56 bg-surface border border-ink-900/10 rounded-lg shadow-lg z-50 py-1">
-                {SLASH_COMMANDS.map((cmd) => {
-                  const isLocalOnly = cmd.requires === 'local';
-                  const isDisabled = isLocalOnly && connectionMode !== 'local';
-                  return (
-                    <button
-                      key={cmd.id}
-                      onClick={() => !isDisabled && handleSlashCommand(cmd.id, '')}
-                      className={`w-full px-4 py-2 text-left text-sm flex items-center justify-between ${
-                        isDisabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-ink-900/5'
-                      }`}
-                      disabled={isDisabled}
-                      title={isDisabled ? 'Requires local mode' : cmd.desc}
-                    >
-                      <span className="font-medium text-ink-900">/{cmd.id}</span>
-                      <span className="text-xs text-ink-500">{cmd.desc}</span>
-                      {isLocalOnly && (
-                        <span className="text-[10px] px-1.5 py-0.5 bg-ink-900/10 rounded text-ink-500">
-                          local
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
+                {SLASH_COMMANDS.map((cmd) => (
+                  <button
+                    key={cmd.id}
+                    onClick={() => { handleSlashCommand(cmd.id, ''); setShowCommands(false); }}
+                    className="w-full px-4 py-2 text-left text-sm flex items-center justify-between hover:bg-ink-900/5"
+                    title={cmd.desc}
+                  >
+                    <span className="font-medium text-ink-900">/{cmd.id}</span>
+                    <span className="text-xs text-ink-500">{cmd.desc}</span>
+                  </button>
+                ))}
               </div>
             )}
           </div>
@@ -599,13 +803,245 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
       </header>
 
       {/* 3-Pane Layout */}
-      <PanelGroup orientation="horizontal" className="flex-1">
-        {/* Left: Memory Panel */}
+      <PanelGroup orientation="horizontal" className="flex-1 min-h-0">
+        {/* Left: Settings Panel */}
         <Panel defaultSize={25} minSize={15} maxSize={40}>
-          <AgentMemoryPanel agentId={agentId} apiUrl={getApiBase()} />
+          <div className="h-full flex flex-col bg-surface border-r border-ink-900/10">
+            {/* Settings Tabs */}
+            <div className="flex border-b border-ink-900/10">
+              {(['config', 'system', 'tools'] as SettingsTab[]).map(t => (
+                <button
+                  key={t}
+                  className={`flex-1 px-3 py-2 text-xs font-medium capitalize transition-colors ${
+                    settingsTab === t
+                      ? 'bg-accent text-white'
+                      : 'text-ink-600 hover:bg-ink-900/5'
+                  }`}
+                  onClick={() => setSettingsTab(t)}
+                >
+                  {t === 'config' ? 'Settings' : t === 'system' ? 'System' : `Tools (${agentTools.length})`}
+                </button>
+              ))}
+            </div>
+
+            {/* Settings Content */}
+            <div className="flex-1 overflow-y-auto p-4">
+              {settingsTab === 'config' && (
+                <div className="space-y-4">
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-semibold text-ink-700 uppercase tracking-wide">Identity</h4>
+                    <ConfigField label="Name" value={cfgName} onChange={setCfgName} />
+                    <ConfigField label="Description" value={cfgDesc} onChange={setCfgDesc} />
+                    <ConfigField label="Tags" value={cfgTags} onChange={setCfgTags} hint="Comma-separated" />
+                  </div>
+
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-semibold text-ink-700 uppercase tracking-wide">Inference</h4>
+                    <ConfigField label="Model" value={cfgModel} onChange={setCfgModel} mono hint="provider/model-name" />
+                    <ConfigField label="Endpoint" value={cfgModelEndpoint} onChange={setCfgModelEndpoint} mono hint="Custom API URL" />
+                    <ConfigField label="Embedding" value={cfgEmbedding} onChange={setCfgEmbedding} mono />
+                  </div>
+
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-semibold text-ink-700 uppercase tracking-wide">Generation</h4>
+                    <ConfigField label="Context Window" value={cfgContextWindow} onChange={setCfgContextWindow} type="number" />
+                    <ConfigField label="Max Tokens" value={cfgMaxTokens} onChange={setCfgMaxTokens} type="number" />
+                    <ConfigField label="Freq. Penalty" value={cfgFreqPenalty} onChange={setCfgFreqPenalty} type="number" hint="-2.0 to 2.0" />
+                    <ConfigToggle label="Parallel Tools" value={cfgParallelToolCalls} onChange={setCfgParallelToolCalls} />
+                  </div>
+
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-semibold text-ink-700 uppercase tracking-wide">Reasoning</h4>
+                    <ConfigToggle label="Reasoner" value={cfgEnableReasoner} onChange={setCfgEnableReasoner} />
+                    <ConfigField label="Max Reasoning Tokens" value={cfgMaxReasoningTokens} onChange={setCfgMaxReasoningTokens} type="number" />
+                    <ConfigSelect label="Effort" value={cfgEffort} onChange={setCfgEffort} options={['', 'low', 'medium', 'high', 'max']} />
+                  </div>
+
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-semibold text-ink-700 uppercase tracking-wide">Behavior</h4>
+                    <ConfigToggle label="Sleeptime" value={cfgSleeptime} onChange={setCfgSleeptime} />
+                    <ConfigToggle label="Autoclear Buffer" value={cfgAutoclear} onChange={setCfgAutoclear} />
+                  </div>
+
+                  <div className="space-y-3 pt-4 border-t border-ink-900/10">
+                    <h4 className="text-xs font-semibold text-ink-700 uppercase tracking-wide">Info</h4>
+                    <ReadonlyRow label="Agent ID" value={agentId} />
+                    <ReadonlyRow label="Created" value={agent.raw?.created_at ? new Date(agent.raw.created_at as string).toLocaleString() : '—'} />
+                    <ReadonlyRow label="Last Run" value={agent.raw?.last_run_completion ? new Date(agent.raw.last_run_completion as string).toLocaleString() : 'Never'} />
+                    <ReadonlyRow label="Ctx Window (model)" value={(llm.context_window as number)?.toLocaleString() || '—'} />
+                    <ReadonlyRow label="Endpoint Type" value={(llm.model_endpoint_type as string) || '—'} />
+                  </div>
+
+                  <div className="flex gap-2 pt-4 sticky bottom-0 bg-surface pb-2">
+                    <button
+                      onClick={saveConfig}
+                      disabled={savingConfig}
+                      className="flex-1 px-3 py-2 text-xs font-medium rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-50"
+                    >
+                      {savingConfig ? 'Saving...' : 'Save'}
+                    </button>
+                    <button
+                      onClick={() => populateConfigForm(agent.raw || {})}
+                      className="px-3 py-2 text-xs font-medium rounded-lg bg-surface-tertiary text-ink-600 hover:bg-ink-900/10 transition-colors"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                  {saveMessage && (
+                    <span className={`text-xs ${saveMessage.includes('Error') ? 'text-red-600' : 'text-green-600'}`}>
+                      {saveMessage}
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {settingsTab === 'system' && (
+                <div className="space-y-3">
+                  {editingSystem ? (
+                    <>
+                      <textarea
+                        value={systemDraft}
+                        onChange={e => setSystemDraft(e.target.value)}
+                        rows={20}
+                        className="w-full rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-xs font-mono text-ink-800 focus:border-accent focus:outline-none resize-vertical"
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          onClick={saveSystem}
+                          disabled={savingConfig}
+                          className="px-3 py-2 text-xs font-medium rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-50"
+                        >
+                          {savingConfig ? 'Saving...' : 'Save'}
+                        </button>
+                        <button
+                          onClick={() => { setEditingSystem(false); setSystemDraft((agent.raw?.system as string) || ''); }}
+                          className="px-3 py-2 text-xs font-medium rounded-lg bg-surface-tertiary text-ink-600 hover:bg-ink-900/10 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <div
+                      className="rounded-lg border border-ink-900/10 bg-surface-secondary p-3 cursor-pointer hover:border-accent/50 transition-colors"
+                      onClick={() => setEditingSystem(true)}
+                    >
+                      <pre className="text-xs text-ink-700 font-mono whitespace-pre-wrap break-words">
+                        {(agent.raw?.system as string) || '(no system prompt)'}
+                      </pre>
+                      <span className="text-xs text-accent mt-2 block">Click to edit</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {settingsTab === 'tools' && (
+                <div className="space-y-3">
+                  {/* Attached tools */}
+                  <div className="space-y-2">
+                    {agentTools.length === 0 ? (
+                      <p className="text-sm text-muted text-center py-4">No tools attached</p>
+                    ) : agentTools.map((t) => (
+                      <div key={t.id} className="flex items-center justify-between p-2 rounded-lg border border-ink-900/10 bg-surface-secondary">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-sm font-medium text-ink-800 truncate">{t.name}</span>
+                          {t.sourceType && <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/10 text-accent">{t.sourceType}</span>}
+                        </div>
+                        <button
+                          onClick={() => detachTool(t.id)}
+                          disabled={toolActionPending === t.id}
+                          className="text-xs text-red-500 hover:text-red-600 px-2 py-1 rounded hover:bg-red-50 transition-colors disabled:opacity-50"
+                        >
+                          {toolActionPending === t.id ? '...' : '×'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Browse / attach tools */}
+                  {showToolBrowser ? (
+                    <div className="mt-4 space-y-2">
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={toolFilter}
+                          onChange={e => setToolFilter(e.target.value)}
+                          placeholder="Filter tools..."
+                          className="flex-1 rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-xs text-ink-800 focus:border-accent focus:outline-none"
+                        />
+                        <button
+                          onClick={() => setShowToolBrowser(false)}
+                          className="px-3 py-2 text-xs font-medium rounded-lg bg-surface-tertiary text-ink-600 hover:bg-ink-900/10 transition-colors"
+                        >
+                          Close
+                        </button>
+                      </div>
+                      <div className="space-y-1 max-h-60 overflow-y-auto">
+                        {loadingTools ? (
+                          <p className="text-sm text-muted text-center py-4">Loading...</p>
+                        ) : availableTools.length === 0 ? (
+                          <p className="text-sm text-muted text-center py-4">No unattached tools found</p>
+                        ) : availableTools.map(t => (
+                          <div
+                            key={t.id}
+                            className="flex items-center justify-between p-2 rounded-lg border border-ink-900/10 bg-surface cursor-pointer hover:bg-accent/5 transition-colors"
+                            onClick={() => attachTool(t.id)}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="text-sm font-medium text-ink-800 truncate">{t.name}</span>
+                              {t.sourceType && <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/10 text-accent">{t.sourceType}</span>}
+                            </div>
+                            <span className="text-xs text-accent">+ attach</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      className="w-full mt-4 px-3 py-2 text-xs font-medium rounded-lg bg-surface-tertiary text-ink-600 hover:bg-ink-900/10 transition-colors"
+                      onClick={() => { setShowToolBrowser(true); loadAgentTools(); }}
+                    >
+                      + Attach Tool
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Delete Agent */}
+            <div className="p-4 border-t border-ink-900/10">
+              {showDeleteConfirm ? (
+                <div className="space-y-2">
+                  <span className="text-xs text-red-600 font-medium">Delete this agent?</span>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleDeleteAgent}
+                      disabled={deleting}
+                      className="flex-1 px-3 py-2 text-xs font-medium rounded-lg bg-red-500 text-white hover:bg-red-600 transition-colors disabled:opacity-50"
+                    >
+                      {deleting ? 'Deleting...' : 'Yes, Delete'}
+                    </button>
+                    <button
+                      onClick={() => setShowDeleteConfirm(false)}
+                      className="px-3 py-2 text-xs font-medium rounded-lg bg-surface-tertiary text-ink-600 hover:bg-ink-900/10 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowDeleteConfirm(true)}
+                  className="w-full px-3 py-2 text-xs font-medium rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors"
+                >
+                  Delete Agent
+                </button>
+              )}
+            </div>
+          </div>
         </Panel>
 
-        <PanelResizeHandle className="w-1 bg-ink-900/10 hover:bg-accent/50 transition-colors" />
+        <Separator className="w-1 bg-ink-900/10 hover:bg-accent/50 transition-colors" />
 
         {/* Center: Chat Panel */}
         <Panel defaultSize={50} minSize={30} maxSize={70}>
@@ -652,7 +1088,7 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
                   </div>
                 )}
 
-                {visibleMessages.length === 0 ? (
+                {visibleMessages.length === 0 && !isLoadingMessages ? (
                   <div className="flex flex-col items-center justify-center py-20 text-center">
                     <div className="text-lg font-medium text-ink-700">No messages yet</div>
                     <p className="mt-2 text-sm text-muted">Start a conversation with {agent.name}</p>
@@ -691,42 +1127,28 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
               </div>
             </div>
 
-            {/* Input with slash command autocomplete */}
+            {/* Input */}
             <div className="flex-shrink-0 bg-gradient-to-t from-surface via-surface to-transparent p-4">
               <div className="mx-auto w-full max-w-3xl">
-                {/* Slash command autocomplete */}
                 {showSlashCommands && inputValue.startsWith('/') && (
                   <div className="mb-2 bg-surface border border-ink-900/10 rounded-lg shadow-lg py-1 max-h-48 overflow-y-auto">
                     {SLASH_COMMANDS
                       .filter(c => c.id.startsWith(inputValue.slice(1).toLowerCase()))
-                      .map(cmd => {
-                        const isLocalOnly = cmd.requires === 'local';
-                        const isDisabled = isLocalOnly && connectionMode !== 'local';
-                        return (
-                          <div
-                            key={cmd.id}
-                            className={`px-4 py-2 flex items-center justify-between ${
-                              isDisabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-ink-900/5 cursor-pointer'
-                            }`}
-                            onClick={() => {
-                              if (!isDisabled) {
-                                setInputValue(`/${cmd.id} `);
-                                setShowSlashCommands(false);
-                              }
-                            }}
-                          >
-                            <div className="flex items-center gap-3">
-                              <span className="font-medium text-ink-900">/{cmd.id}</span>
-                              <span className="text-xs text-ink-500">{cmd.desc}</span>
-                            </div>
-                            {isLocalOnly && (
-                              <span className="text-[10px] px-1.5 py-0.5 bg-accent/10 text-accent rounded">
-                                local
-                              </span>
-                            )}
+                      .map(cmd => (
+                        <div
+                          key={cmd.id}
+                          className="px-4 py-2 flex items-center justify-between hover:bg-ink-900/5 cursor-pointer"
+                          onClick={() => {
+                            setInputValue(`/${cmd.id} `);
+                            setShowSlashCommands(false);
+                          }}
+                        >
+                          <div className="flex items-center gap-3">
+                            <span className="font-medium text-ink-900">/{cmd.id}</span>
+                            <span className="text-xs text-ink-500">{cmd.desc}</span>
                           </div>
-                        );
-                      })}
+                        </div>
+                      ))}
                   </div>
                 )}
 
@@ -750,13 +1172,13 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
                         setShowSlashCommands(false);
                       }
                     }}
-                    disabled={!activeConversationId}
+                    disabled={!activeConversationId || isStreaming}
                     style={{ minHeight: '24px', maxHeight: '200px' }}
                   />
                   <button
                     className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-white hover:bg-accent-hover transition-colors disabled:cursor-not-allowed disabled:opacity-60"
                     onClick={handleInputSend}
-                    disabled={!activeConversationId || !inputValue.trim()}
+                    disabled={!activeConversationId || !inputValue.trim() || isStreaming}
                   >
                     <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
                       <path d="M3.4 20.6 21 12 3.4 3.4l2.8 7.2L16 12l-9.8 1.4-2.8 7.2Z" fill="currentColor" />
@@ -780,13 +1202,73 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
           </div>
         </Panel>
 
-        <PanelResizeHandle className="w-1 bg-ink-900/10 hover:bg-accent/50 transition-colors" />
+        <Separator className="w-1 bg-ink-900/10 hover:bg-accent/50 transition-colors" />
 
-        {/* Right: Config Panel */}
+        {/* Right: Memory Panel */}
         <Panel defaultSize={25} minSize={15} maxSize={40}>
-          <AgentConfigPanel agentId={agentId} />
+          <AgentMemoryPanel agentId={agentId} />
         </Panel>
       </PanelGroup>
+    </div>
+  );
+}
+
+// ═══ Config Form Helpers ═══
+
+function ConfigField({ label, value, onChange, type = 'text', mono, hint }: {
+  label: string; value: string; onChange: (v: string) => void;
+  type?: string; mono?: boolean; hint?: string;
+}) {
+  return (
+    <div className="space-y-1">
+      <label className="text-xs font-medium text-ink-700">{label}</label>
+      <input
+        type={type}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        className={`w-full rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-xs text-ink-800 focus:border-accent focus:outline-none ${mono ? 'font-mono' : ''}`}
+      />
+      {hint && <span className="text-[10px] text-ink-500">{hint}</span>}
+    </div>
+  );
+}
+
+function ConfigToggle({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <div className="flex items-center justify-between py-1">
+      <span className="text-xs font-medium text-ink-700">{label}</span>
+      <button
+        onClick={() => onChange(!value)}
+        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${value ? 'bg-accent' : 'bg-ink-900/20'}`}
+      >
+        <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${value ? 'translate-x-5' : 'translate-x-1'}`} />
+      </button>
+    </div>
+  );
+}
+
+function ConfigSelect({ label, value, onChange, options }: {
+  label: string; value: string; onChange: (v: string) => void; options: string[];
+}) {
+  return (
+    <div className="space-y-1">
+      <label className="text-xs font-medium text-ink-700">{label}</label>
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        className="w-full rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-xs text-ink-800 focus:border-accent focus:outline-none"
+      >
+        {options.map(o => <option key={o} value={o}>{o || '(default)'}</option>)}
+      </select>
+    </div>
+  );
+}
+
+function ReadonlyRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between py-1">
+      <span className="text-xs text-ink-600">{label}</span>
+      <span className="text-xs font-mono text-ink-800">{value}</span>
     </div>
   );
 }

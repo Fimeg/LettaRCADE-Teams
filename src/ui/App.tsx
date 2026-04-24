@@ -1,9 +1,12 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAppStore, type TopTab } from "./store/useAppStore";
 import type { ClientEvent } from "./types";
 import { AgentsBrowser } from "./components/AgentsBrowser";
 import { AgentWorkspace } from "./components/AgentWorkspace";
+import { AgentWizard } from "./components/agents/AgentWizard";
+import { ModelsView } from "./components/ModelsView";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { LettaCodeLogPanel } from "./components/LettaCodeLogPanel";
 import { StartSessionModal } from "./components/StartSessionModal";
 import { useIPC } from "./hooks/useIPC";
 
@@ -34,6 +37,16 @@ function App() {
 
   // IPC for sending events to backend
   const { sendEvent } = useIPC(handleServerEvent);
+
+  // Agent creation wizard
+  const [showWizard, setShowWizard] = useState(false);
+
+  const handleAgentCreated = useCallback(async (agentId: string) => {
+    setShowWizard(false);
+    await loadAgentList();
+    setSelectedAgentId(agentId);
+    setActiveTab('agents');
+  }, [loadAgentList, setSelectedAgentId, setActiveTab]);
 
   // Load agent list on mount (health check)
   useEffect(() => {
@@ -100,16 +113,11 @@ function App() {
             agents={agentList}
             loading={agentsLoading}
             onSelectAgent={onSelectAgent}
-            onCreateAgent={() => { /* TODO: create agent modal */ }}
+            onCreateAgent={() => setShowWizard(true)}
           />
         );
       case 'models':
-        return (
-          <div className="flex flex-col items-center justify-center h-full text-ink-600">
-            <div className="text-lg font-medium">Models</div>
-            <p className="text-sm mt-2">Model management coming soon</p>
-          </div>
-        );
+        return <ModelsView />;
       case 'settings':
         return <SettingsPanel />;
       default:
@@ -177,6 +185,16 @@ function App() {
           onClose={() => setShowStartModal(false)}
         />
       )}
+
+      {/* Agent creation wizard */}
+      <AgentWizard
+        isOpen={showWizard}
+        onClose={() => setShowWizard(false)}
+        onCreated={handleAgentCreated}
+      />
+
+      {/* Letta-code subprocess debug console (only renders in Electron) */}
+      <LettaCodeLogPanel />
 
       {/* Global error */}
       {globalError && (

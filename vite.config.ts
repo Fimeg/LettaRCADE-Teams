@@ -16,6 +16,22 @@ export default defineConfig(({ mode }) => {
 		server: {
 			port, // MUST BE LOWERCASE
 			strictPort: true,
+			headers: {
+				'Content-Security-Policy': "default-src 'self'; connect-src 'self' http://* http://*:* https://* https://*:* ws://* wss://* http://10.10.20.19:* https://10.10.20.19:*; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; worker-src 'self' blob:;",
+			},
+			proxy: {
+				// Proxy all Letta API calls through Vite dev server to avoid CORS
+				'/v1': {
+					target: env.VITE_API_URL || 'http://localhost:8283',
+					changeOrigin: true,
+					secure: false,
+				},
+				'/health': {
+					target: env.VITE_API_URL || 'http://localhost:8283',
+					changeOrigin: true,
+					secure: false,
+				},
+			},
 		},
 	};
 });

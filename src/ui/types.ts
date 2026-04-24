@@ -92,10 +92,16 @@ export type UserPromptMessage = {
   prompt: string;
 };
 
+// System message for command output (not in SDK)
+export type SystemMessage = {
+  type: "system";
+  content: string;
+};
+
 // Import for union type and local use
 import type { SDKMessage, CanUseToolResponse } from "@letta-ai/letta-code-sdk";
 
-export type StreamMessage = SDKMessage | UserPromptMessage;
+export type StreamMessage = SDKMessage | UserPromptMessage | SystemMessage;
 
 export type SessionStatus = "idle" | "running" | "completed" | "error";
 

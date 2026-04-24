@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { agentsApi } from '../services/api';
+import { agentsApi, conversationsApi } from '../services/api';
 import type { Conversation as ApiConversation } from '../services/api';
 import type { ServerEvent, SessionStatus, StreamMessage } from "../types";
 
@@ -131,6 +131,7 @@ interface AppState {
   activeTab: TopTab;
   serverConnected: boolean | null;
   activeConversationId: string | null;
+  lastConversationPerAgent: Record<string, string>;
   prompt: string;
   cwd: string;
   pendingStart: boolean;
@@ -153,7 +154,8 @@ interface AppState {
   loadAgent: (id: string) => Promise<void>;
   deleteAgent: (id: string) => Promise<void>;
   toggleTool: (agentId: string, toolId: string, nextEnabled: boolean) => Promise<void>;
-  updateAgent: (agent: Agent) => void;
+  updateAgent: (id: string, updates: Record<string, unknown>) => Promise<void>;
+  createConversation: (agentId: string) => Promise<ApiConversation | null>;
   updateMemoryBlock: (agentId: string, blockLabel: string, newValue: string) => Promise<void>;
   updateMemoryBlocks: (agentId: string, blocks: MemoryBlock[]) => void;
   markHistoryRequested: (sessionId: string) => void;
@@ -208,6 +210,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeTab: 'agents',
   serverConnected: null,
   activeConversationId: null,
+  lastConversationPerAgent: {},
   prompt: "",
   cwd: "",
   pendingStart: false,
@@ -222,10 +225,23 @@ export const useAppStore = create<AppState>((set, get) => ({
   setGlobalError: (globalError) => set({ globalError }),
   setShowStartModal: (showStartModal) => set({ showStartModal }),
   setActiveSessionId: (id) => set({ activeSessionId: id }),
-  setSelectedAgentId: (id) => set({ selectedAgentId: id, activeConversationId: null }),
+  setSelectedAgentId: (id) => set((state) => ({
+    selectedAgentId: id,
+    activeConversationId: id ? (state.lastConversationPerAgent[id] ?? null) : null,
+  })),
   setActiveTab: (activeTab) => set({ activeTab }),
   setServerConnected: (serverConnected) => set({ serverConnected }),
-  setActiveConversationId: (activeConversationId) => set({ activeConversationId }),
+  setActiveConversationId: (activeConversationId) => set((state) => {
+    const agentId = state.selectedAgentId;
+    if (!agentId) return { activeConversationId };
+    const nextMap = { ...state.lastConversationPerAgent };
+    if (activeConversationId) {
+      nextMap[agentId] = activeConversationId;
+    } else {
+      delete nextMap[agentId];
+    }
+    return { activeConversationId, lastConversationPerAgent: nextMap };
+  }),
 
   loadAgentList: async () => {
     set({ agentsLoading: true, agentsError: null });
@@ -252,17 +268,19 @@ export const useAppStore = create<AppState>((set, get) => ({
   loadAgent: async (id) => {
     try {
       const detail = await agentsApi.getAgent(id);
-      const raw = (detail.raw ?? {}) as Record<string, unknown>;
+      // FIX: Use type assertion for 'raw' access since SDK AgentState may have runtime properties
+      const raw = ((detail as unknown as { raw?: Record<string, unknown> }).raw) ?? {};
       const llm = (raw.llm_config as Record<string, unknown> | undefined) ?? {};
 
+      // FIX: Handle null/undefined id and label with proper defaults
       const memoryBlocks: MemoryBlock[] = detail.blocks.map((b) => {
         // Extract text from either new `content` field or legacy `value` field
         const extractedText = extractBlockText(
-          (b as { content?: unknown }).content ?? b.value,
+          (b as { content?: unknown }).content ?? (b as { value?: unknown }).value,
         );
         return {
-          id: b.id ?? b.label,
-          label: b.label,
+          id: (b.id || b.label || 'unknown') as string,
+          label: (b.label || 'unknown') as string,
           // Set both fields for backwards compatibility
           value: extractedText,  // Legacy field
           content: { text: extractedText },  // SDK 0.1.14+ format
@@ -278,10 +296,11 @@ export const useAppStore = create<AppState>((set, get) => ({
           .filter((v): v is string => !!v),
       );
 
+      // FIX: Handle null/undefined tool name with default, ensure description is string | undefined (not null)
       const tools: ToolAttachment[] = detail.tools.map((t) => ({
         id: t.id,
-        name: t.name,
-        description: t.description,
+        name: (t.name || 'Unnamed Tool') as string,
+        description: t.description ?? undefined,
         enabled: attachedIds.size === 0 ? true : attachedIds.has(t.id),
       }));
 
@@ -297,7 +316,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         temperature: llm.temperature as number | undefined,
         memoryBlocks,
         tools,
-        conversations: detail.conversations ?? [],
+        // FIX: Use type assertion for conversations access
+        conversations: ((detail as unknown as { conversations?: ApiConversation[] }).conversations) ?? [],
         raw,
         loaded: true,
         createdAt: nowCreated,
@@ -308,10 +328,15 @@ export const useAppStore = create<AppState>((set, get) => ({
         agents: { ...state.agents, [id]: agent },
       }));
 
-      // Auto-select first conversation if none active
+      // Auto-select a conversation if none active. Prefer the last one the
+      // user had open for this agent; fall back to the first available.
       const state = get();
       if (!state.activeConversationId && agent.conversations.length > 0) {
-        set({ activeConversationId: agent.conversations[0].id });
+        const remembered = state.lastConversationPerAgent[id];
+        const pick = remembered && agent.conversations.some(c => c.id === remembered)
+          ? remembered
+          : agent.conversations[0].id;
+        get().setActiveConversationId(pick);
       }
     } catch (err) {
       console.error('[useAppStore] Failed to load agent:', err);
@@ -325,11 +350,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       set((state) => {
         const nextAgents = { ...state.agents };
         delete nextAgents[id];
+        const nextLastConv = { ...state.lastConversationPerAgent };
+        delete nextLastConv[id];
         return {
           agents: nextAgents,
           agentList: state.agentList.filter((a) => a.id !== id),
           selectedAgentId: state.selectedAgentId === id ? null : state.selectedAgentId,
           activeConversationId: state.selectedAgentId === id ? null : state.activeConversationId,
+          lastConversationPerAgent: nextLastConv,
         };
       });
     } catch (err) {
@@ -378,9 +406,30 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  updateAgent: (agent) => set((state) => ({
-    agents: { ...state.agents, [agent.id]: agent }
-  })),
+  updateAgent: async (id, updates) => {
+    try {
+      await agentsApi.updateAgent(id, updates as Parameters<typeof agentsApi.updateAgent>[1]);
+      // Refresh agent data after update
+      await get().loadAgent(id);
+    } catch (err) {
+      console.error('[useAppStore] Failed to update agent:', err);
+      set({ globalError: err instanceof Error ? err.message : 'Failed to update agent' });
+      throw err;
+    }
+  },
+
+  createConversation: async (agentId) => {
+    try {
+      const conv = await conversationsApi.createConversation(agentId);
+      // Refresh agent to get updated conversations list
+      await get().loadAgent(agentId);
+      return conv;
+    } catch (err) {
+      console.error('[useAppStore] Failed to create conversation:', err);
+      set({ globalError: err instanceof Error ? err.message : 'Failed to create conversation' });
+      return null;
+    }
+  },
 
   updateMemoryBlock: async (agentId, blockLabel, newValue) => {
     // Update local state immediately for responsiveness
@@ -410,7 +459,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       console.error('[useAppStore] Failed to update memory block:', error);
       // Revert on error by re-fetching
       const blocks = await agentsApi.getMemoryBlocks(agentId);
-      get().updateMemoryBlocks(agentId, blocks);
+      // FIX: Map BlockResponse to MemoryBlock with proper null-safety
+      const mappedBlocks: MemoryBlock[] = blocks.map((b) => ({
+        id: (b.id || b.label || 'unknown') as string,
+        label: (b.label || 'unknown') as string,
+        value: (b as { value?: string }).value || '',
+        content: (b as { content?: string | { text?: string } }).content || { text: (b as { value?: string }).value || '' },
+        limit: b.limit,
+      }));
+      get().updateMemoryBlocks(agentId, mappedBlocks);
     }
   },
 
