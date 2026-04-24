@@ -1,7 +1,7 @@
 /**
  * useStreamingMessages - React hook for streaming agent messages via Letta SDK
  *
- * Uses agent-scoped messaging (client.agents.messages.create) following letta-code-new patterns.
+ * Uses conversations.messages.create with "default" conversation for agent-direct mode.
  */
 
 import { useCallback, useState } from "react";
@@ -36,7 +36,7 @@ export interface UseStreamingMessagesReturn {
  * Hook for streaming messages to an agent using the Letta SDK.
  *
  * @param agentId - The agent ID to send messages to
- * @param conversationId - Optional conversation ID for context (passed via message metadata)
+ * @param conversationId - Optional conversation ID for context (defaults to "default")
  * @returns Object with sendMessage function, isStreaming state, and error state
  */
 export function useStreamingMessages(
@@ -55,18 +55,21 @@ export function useStreamingMessages(
       try {
         const client = getLettaClient();
 
+        // Use "default" conversation for agent-direct messaging
+        // Pass agent_id in body to identify target agent
+        const convId = conversationId || "default";
+
         const body: Record<string, unknown> = {
-          messages: [{ role: "user", content }],
+          agent_id: agentId,
+          messages: [{ role: "user", content, type: "message" }],
           streaming: true,
+          stream_tokens: true,
+          include_pings: true,
+          background: true,
         };
 
-        // Include conversation_id if provided for context
-        if (conversationId) {
-          body.conversation_id = conversationId;
-        }
-
-        console.log(`[useStreamingMessages] Calling client.agents.messages.create(${agentId}, streaming=true)`);
-        const stream = await client.agents.messages.create(agentId, body);
+        console.log(`[useStreamingMessages] Calling client.conversations.messages.create("${convId}", agentId=${agentId})`);
+        const stream = await client.conversations.messages.create(convId, body);
         console.log(`[useStreamingMessages] Got stream, iterating chunks...`);
 
         let chunkCount = 0;
