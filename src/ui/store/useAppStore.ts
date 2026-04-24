@@ -277,8 +277,11 @@ export const useAppStore = create<AppState>((set, get) => ({
           return [] as ApiConversation[];
         }),
       ]);
-      // FIX: Use type assertion for 'raw' access since SDK AgentState may have runtime properties
-      const raw = ((detail as unknown as { raw?: Record<string, unknown> }).raw) ?? {};
+      // The SDK's AgentState does not nest fields under a `raw` key — they're
+      // at the top level. Treat the full detail object as the raw source so
+      // downstream readers (e.g. AgentWorkspace.populateConfigForm) see real
+      // values instead of an empty object.
+      const raw = detail as unknown as Record<string, unknown>;
       const llm = (raw.llm_config as Record<string, unknown> | undefined) ?? {};
 
       // FIX: Handle null/undefined id and label with proper defaults

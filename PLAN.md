@@ -13,9 +13,10 @@ Architecture reference lives in `CLAUDE.md` (do not duplicate here).
 | Conversations | 🟡 basic | History loads (fixed 2026-04-24); create on first send; delete UI w/ confirm (2026-04-24); scoped per-conversation (fixed 2026-04-24) |
 | Messaging / streaming | 🟢 working | `client.conversations.messages.create` w/ streaming (fixed 2026-04-24 — was using agent-scoped endpoint → no replies, history bleed); tool/reasoning messages render |
 | Memory | 🟢 working | Curator health, sacred blocks, archival CRUD; visuals are basic bars |
-| Agents | 🟡 partial | List / detail / edit / delete work; **creation wizard scaffolded but not integrated** |
+| Agents | 🟢 working | List / detail / edit / delete; creation wizard wired in `App.tsx` (2026-04-24); config form now pre-populates (was reading a non-existent `detail.raw` field) |
 | Slash commands | 🟢 working | `/doctor /clear /remember /recompile` via native client |
-| Settings | 🟡 basic | `SettingsPanel.tsx`; server-setup wizard + provider panel pending |
+| Settings (per-agent) | 🟢 working | All fields present (Identity/Inference/Generation/Reasoning/Behavior/Info) incl. Chat nickname (2026-04-24). Save path functional post `raw` fix. |
+| Settings (global) | 🟡 basic | `SettingsPanel.tsx`; server-setup wizard + provider panel pending |
 | Electron | 🟡 dev-only | `npm run dev` works; no hardening, auto-update, or signing |
 | Connection mode | 🟢 working | Local/server toggle styled in AgentWorkspace header |
 
@@ -25,14 +26,10 @@ Architecture reference lives in `CLAUDE.md` (do not duplicate here).
 
 | Gitea # | Title | Status | Next concrete step |
 |---|---|---|---|
-| — | Back button navigation | 🐞 two systems, one broken | Audit `onBack` callers + any history-stack logic; consolidate to one |
-| — | Assistant display name + nickname | 🟡 shows agent name (2026-04-24) | Add per-agent nickname field (localStorage or agent tag); settings UI to edit; fallback: agent.name → "Assistant" |
-| — | Full agent settings panel | 🟡 most fields exist in AgentWorkspace | Add missing: Tags, Endpoint (custom URL), Generation, Endpoint Type; Info read-only block (Agent ID, Created, Last Run, Ctx Window, Endpoint Type). See "Settings schema" below. |
 | — | Memory block management — memfs vs traditional | ⛔ not started | Detect agent memfs-compat from agent config; branch editor UI (memfs file-tree vs traditional block list) |
-| — | Memory pressure gauge | `MemoryPressureBar.tsx` (43 lines, linear) | Circular SVG gauge + token-count estimate beside it |
+| — | Save-diff preview on settings | 🆕 new ask | Before applying, show "You're changing X from A to B" diff modal (user said "might add later") |
 | — | Server-setup wizard modal | subagent output saved (`a791e0752cac1fe22`) | Implement from that output |
 | — | Provider config panel | subagent output (unverified) | Audit output; may need re-spec |
-| **#10** | Agent creation wizard | Components in `src/ui/components/agents/` | Integrate into `App.tsx`; add "New Agent" trigger in `Sidebar` / `AgentsBrowser`; verify `agentsApi.listAllModels()` |
 
 ---
 

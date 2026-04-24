@@ -3,6 +3,7 @@ import { useAppStore, type MemoryBlock } from "../store/useAppStore";
 import { useSacredBlocks } from "../hooks/useSacredBlocks";
 import { calculateMemoryHealth, classifyTier, tierColors } from "../utils/memoryHealth";
 import { MemoryPressureBar } from "./MemoryPressureBar";
+import { MemoryPressureGauge } from "./MemoryPressureGauge";
 import { BlockPressureIndicator } from "./BlockPressureIndicator";
 import { SacredToggle } from "./SacredToggle";
 import { agentsApi } from "../services/api";
@@ -282,22 +283,9 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
         {activeTab === "core" && (
           <>
             {/* Memory Health Indicator */}
-            <div className="mb-4 rounded-xl border border-ink-900/10 bg-surface-secondary p-3">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-medium text-ink-700">Memory Pressure</span>
-                <span
-                  className={`text-xs font-semibold ${
-                    memoryHealth.overallPressure > 0.85
-                      ? "text-red-600"
-                      : memoryHealth.overallPressure > 0.7
-                      ? "text-amber-600"
-                      : "text-green-600"
-                  }`}
-                >
-                  {(memoryHealth.overallPressure * 100).toFixed(0)}%
-                </span>
-              </div>
-              <MemoryPressureBar pressure={memoryHealth.overallPressure} size="md" showLabel={false} />
+            <div className="mb-4 rounded-xl border border-ink-900/10 bg-surface-secondary p-4">
+              <div className="text-xs font-medium text-ink-700 mb-3">Memory Pressure</div>
+              <MemoryPressureGauge health={memoryHealth} />
               {memoryHealth.needsAttention && (
                 <div className="mt-3 flex items-center gap-2 text-xs text-amber-600">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
