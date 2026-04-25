@@ -31,3 +31,7 @@ bun.lock
 
 # Letta
 .letta/
+
+# Casey's local working notes — not for collaborators. Vedant and other
+# contributors get CLAUDE.md + HANDOFF_TEAMS.md + README.md at the root.
+docs/
