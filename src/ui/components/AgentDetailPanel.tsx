@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useAppStore, type Agent, type MemoryBlock, type ToolAttachment } from "../store/useAppStore";
+import { useAppStore, isMemfsEnabledAgent, type Agent, type MemoryBlock, type ToolAttachment } from "../store/useAppStore";
 import { MemoryBlockList } from "./MemoryBlockList";
 import { ToolAttachmentList } from "./ToolAttachmentList";
 import { useMemorySync } from "../hooks/useMemorySync";
@@ -217,9 +217,19 @@ export function AgentDetailPanel({ agentId, className }: AgentDetailPanelProps) 
             </svg>
           </div>
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-ink-800 truncate">
-              {agent.name}
-            </h2>
+            <div className="flex items-center gap-1.5">
+              <h2 className="text-sm font-semibold text-ink-800 truncate">
+                {agent.name}
+              </h2>
+              {isMemfsEnabledAgent(agent.raw as { memory?: { git_enabled?: boolean } | null; tags?: string[] | null } | undefined) && (
+                <span
+                  className="shrink-0 px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-medium uppercase tracking-wide"
+                  title="git-memory-enabled — agent uses memfs (git-backed memory)"
+                >
+                  memfs
+                </span>
+              )}
+            </div>
             <p className="text-xs text-muted truncate">{agent.id.slice(0, 8)}...</p>
           </div>
         </div>
@@ -405,10 +415,9 @@ export function AgentDetailPanel({ agentId, className }: AgentDetailPanelProps) 
       </div>
 
       {/* Footer */}
-      <div className="border-t border-border px-4 py-3">
-        <div className="flex items-center justify-between text-xs text-muted">
-          <span>Agent ID: {agent.id.slice(0, 12)}...</span>
-          <span>v0.16.7</span>
+      <div className="border-t border-border px-4 py-2">
+        <div className="flex items-center justify-center text-[10px] text-ink-400">
+          <span>Letta Community ADE</span>
         </div>
       </div>
 

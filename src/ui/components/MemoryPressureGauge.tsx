@@ -5,12 +5,6 @@ interface MemoryPressureGaugeProps {
   size?: number;
 }
 
-/** Rough char-to-token estimate. Good enough for a UI gauge; exact tokenization
- *  depends on the model. ~4 chars/token is the standard ballpark. */
-function estimateTokens(chars: number): number {
-  return Math.round(chars / 4);
-}
-
 function formatNumber(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
   return n.toString();
@@ -25,10 +19,13 @@ export function MemoryPressureGauge({ health, size = 96 }: MemoryPressureGaugePr
   const color =
     pressure > 0.85 ? '#ef4444' : pressure > 0.7 ? '#f59e0b' : '#22c55e';
 
-  const totalChars = health.blockHealths.reduce((sum, b) => sum + b.currentLength, 0);
+  // Tokens are real tiktoken counts (cl100k_base). The "limit" shown next to
+  // them is a token-equivalent of the server's char limit (~chars/4 — a
+  // rough rule, but the limit is a server-side char cap so converting back
+  // to tokens for display lets users compare like-with-like.)
   const totalLimit = health.blockHealths.reduce((sum, b) => sum + b.limit, 0);
-  const totalTokens = estimateTokens(totalChars);
-  const limitTokens = estimateTokens(totalLimit);
+  const totalTokens = health.totalTokens;
+  const limitTokens = totalLimit > 0 ? Math.round(totalLimit / 4) : 0;
 
   return (
     <div className="flex items-center gap-4">
@@ -65,11 +62,13 @@ export function MemoryPressureGauge({ health, size = 96 }: MemoryPressureGaugePr
       </div>
 
       <div className="flex flex-col gap-1 min-w-0">
-        <div className="text-xs text-ink-500">~Tokens (est.)</div>
+        <div className="text-xs text-ink-500" title="Real tiktoken counts using cl100k_base (close approximation for Claude / GPT-4)">
+          Tokens (cl100k)
+        </div>
         <div className="text-sm font-medium text-ink-900">
           {formatNumber(totalTokens)}
           {limitTokens > 0 && (
-            <span className="text-ink-500 font-normal"> / {formatNumber(limitTokens)}</span>
+            <span className="text-ink-500 font-normal"> / ~{formatNumber(limitTokens)}</span>
           )}
         </div>
         <div className="text-[11px] text-ink-500">

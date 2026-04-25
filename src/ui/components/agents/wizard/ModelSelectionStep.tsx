@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { agentsApi } from '../../../services/api';
+import { listLLMModels } from '../../../services/api';
 
 interface ModelSelectionStepProps {
   selectedModel: string;
@@ -27,7 +27,7 @@ export function ModelSelectionStep({ selectedModel, onSelect }: ModelSelectionSt
   const loadModels = async () => {
     try {
       setLoading(true);
-      const agentModels = await agentsApi.listAllModels?.() || [];
+      const agentModels = await listLLMModels();
       // Fallback to common models if API doesn't return models
       const fallbackModels: ModelOption[] = [
         { id: 'anthropic/claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5', provider: 'anthropic', contextWindow: 200000 },

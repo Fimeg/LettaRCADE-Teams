@@ -5,7 +5,7 @@ import { ModelSelectionStep } from './wizard/ModelSelectionStep';
 import { SystemPromptStep } from './wizard/SystemPromptStep';
 import { ToolAccessStep } from './wizard/ToolAccessStep';
 import { ReviewStep } from './wizard/ReviewStep';
-import { agentsApi } from '../../services/api';
+import { getLettaClient } from '../../services/api';
 
 interface AgentWizardProps {
   isOpen: boolean;
@@ -24,20 +24,32 @@ interface WizardData {
 
 const STEPS = ['Basic Info', 'Model', 'System', 'Tools', 'Review'];
 
+const DEFAULT_MODEL = 'anthropic/claude-sonnet-4-5-20250929';
+const DEFAULT_LLM_KEY = 'letta_default_llm';
+
+function getDefaultModel(): string {
+  try {
+    const stored = localStorage.getItem(DEFAULT_LLM_KEY);
+    return stored ? JSON.parse(stored) : DEFAULT_MODEL;
+  } catch {
+    return DEFAULT_MODEL;
+  }
+}
+
 export function AgentWizard({ isOpen, onClose, onCreated }: AgentWizardProps) {
   const [currentStep, setCurrentStep] = useState(1);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
 
-  const [data, setData] = useState<WizardData>({
+  const [data, setData] = useState<WizardData>(() => ({
     name: '',
     description: '',
     tags: '',
-    model: 'anthropic/claude-sonnet-4-5-20250929',
+    model: getDefaultModel(),
     systemPrompt: '',
     selectedTools: [],
-  });
+  }));
 
   const updateData = useCallback((field: keyof WizardData, value: string | string[]) => {
     setData((prev) => ({ ...prev, [field]: value }));
@@ -103,11 +115,18 @@ export function AgentWizard({ isOpen, onClose, onCreated }: AgentWizardProps) {
         .filter(Boolean);
 
       // Create agent
-      const agent = await agentsApi.createAgent({
+      const client = getLettaClient();
+      const systemPrompt = data.systemPrompt.trim();
+      const agent = await client.agents.create({
         name: data.name.trim(),
         description: data.description.trim() || undefined,
         model: data.model,
-        system: data.systemPrompt.trim() || undefined,
+        embedding: 'openai/text-embedding-3-small',
+        memory_blocks: [
+          { label: 'persona', value: systemPrompt || 'I am a helpful assistant.' },
+          { label: 'human', value: 'User information will be stored here.' },
+        ],
+        system: systemPrompt || undefined,
         tags: tags.length > 0 ? tags : undefined,
       });
 
@@ -115,7 +134,7 @@ export function AgentWizard({ isOpen, onClose, onCreated }: AgentWizardProps) {
       if (data.selectedTools.length > 0) {
         for (const toolId of data.selectedTools) {
           try {
-            await agentsApi.attachTool(agent.id, toolId);
+            await client.agents.tools.attach(toolId, { agent_id: agent.id });
           } catch (err) {
             console.warn(`Failed to attach tool ${toolId}:`, err);
           }
@@ -128,7 +147,7 @@ export function AgentWizard({ isOpen, onClose, onCreated }: AgentWizardProps) {
         name: '',
         description: '',
         tags: '',
-        model: 'anthropic/claude-sonnet-4-5-20250929',
+        model: getDefaultModel(),
         systemPrompt: '',
         selectedTools: [],
       });

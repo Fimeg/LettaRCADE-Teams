@@ -1,6 +1,19 @@
 /**
  * API client using @letta-ai/letta-client
- * Native Letta REST API - no wrapper needed
+ * Native Letta REST API — direct SDK usage, no wrappers.
+ *
+ * Consumers should call `getLettaClient()` and use SDK methods directly:
+ *
+ *   const client = getLettaClient();
+ *   const agent = await client.agents.retrieve(id);
+ *
+ * The only helpers exported here are:
+ *   - getLettaClient/getApiBase/getApiKey/resetClient — client lifecycle
+ *   - listLLMModels/listEmbeddingModels — UI-shape normalization for the
+ *     wizard / settings / models views (3+ call sites; worth dedup'ing)
+ *   - systemApi — custom server probes (external memfs, health) that are
+ *     not part of the SDK
+ *   - deployApi — mock deploy API (placeholder)
  */
 
 import { Letta } from "@letta-ai/letta-client";
@@ -68,6 +81,75 @@ export type LettaStreamingResponse = Letta.Agents.Messages.LettaStreamingRespons
 export type { Conversation } from "@letta-ai/letta-client/resources/conversations/conversations.js";
 
 // =============================================================================
+// Model normalization helpers
+// =============================================================================
+// The SDK returns raw model shapes that need to be normalized into the
+// `{id, name, provider, contextWindow}` form the wizard / settings / models
+// views all expect. Three consumers, identical normalization — keep this
+// helper here rather than copy/pasting it three times.
+
+export interface LLMModelOption {
+  id: string;
+  name: string;
+  provider: string;
+  description?: string;
+  contextWindow?: number;
+}
+
+export interface EmbeddingModelOption {
+  id: string;
+  name: string;
+  provider: string;
+  dimensions?: number;
+}
+
+/** List all LLM models from the connected server, normalized for UI consumption. */
+export async function listLLMModels(): Promise<LLMModelOption[]> {
+  const client = getLettaClient();
+  const models = await client.models.list();
+  return models.map((m) => {
+    const raw = m as unknown as {
+      handle?: string | null;
+      model?: string;
+      display_name?: string | null;
+      context_window?: number;
+      model_endpoint_type?: string;
+    };
+    const id = raw.handle || raw.model || 'unknown';
+    const provider = id.includes('/') ? id.split('/')[0] : (raw.model_endpoint_type ?? 'unknown');
+    return {
+      id,
+      name: raw.display_name || id.split('/').pop() || id,
+      provider,
+      contextWindow: raw.context_window,
+    };
+  });
+}
+
+/** List all embedding models from the connected server, normalized for UI. */
+export async function listEmbeddingModels(): Promise<EmbeddingModelOption[]> {
+  const client = getLettaClient();
+  const models = await client.models.embeddings.list();
+  return models.map((m) => {
+    const raw = m as unknown as {
+      handle?: string | null;
+      embedding_model?: string;
+      embedding_endpoint_type?: string;
+      embedding_dim?: number;
+      display_name?: string | null;
+    };
+    const id = raw.handle || raw.embedding_model || 'unknown';
+    const provider = id.includes('/') ? id.split('/')[0] : (raw.embedding_endpoint_type ?? 'unknown');
+    return {
+      id,
+      name: raw.display_name || id.split('/').pop() || id,
+      provider,
+      dimensions: raw.embedding_dim,
+    };
+  });
+}
+
+// =============================================================================
 // Deployment Types
 // =============================================================================
 
@@ -94,230 +176,27 @@ export interface DeployConfig {
 }
 
 // =============================================================================
-// Agent API
-// =============================================================================
-
-export const agentsApi = {
-  /** List all agents */
-  listAgents: async () => {
-    const client = getLettaClient();
-    const agents: Letta.AgentState[] = [];
-    for await (const agent of client.agents.list()) {
-      agents.push(agent);
-    }
-    return agents;
-  },
-
-  /** Get agent details */
-  getAgent: async (id: string) => {
-    const client = getLettaClient();
-    return await client.agents.retrieve(id);
-  },
-
-  /** Create a new agent */
-  createAgent: async (params: {
-    name: string;
-    description?: string;
-    model?: string;
-    system?: string;
-    memory_blocks?: Array<{ label: string; value: string }>;
-    tools?: string[];
-    tags?: string[];
-  }) => {
-    const client = getLettaClient();
-    return await client.agents.create({
-      name: params.name,
-      description: params.description,
-      model: params.model || "anthropic/claude-sonnet-4-5-20250929",
-      embedding: "openai/text-embedding-3-small",
-      memory_blocks: params.memory_blocks || [
-        { label: "persona", value: params.system || "I am a helpful assistant." },
-        { label: "human", value: "User information will be stored here." },
-      ],
-      tools: params.tools,
-      tags: params.tags,
-    });
-  },
-
-  /** Update agent */
-  updateAgent: async (id: string, updates: Letta.AgentUpdateParams) => {
-    const client = getLettaClient();
-    return await client.agents.update(id, updates);
-  },
-
-  /** Delete agent */
-  deleteAgent: async (id: string) => {
-    const client = getLettaClient();
-    return await client.agents.delete(id);
-  },
-
-  /** List agent's memory blocks */
-  getMemoryBlocks: async (agentId: string) => {
-    const client = getLettaClient();
-    const blocks: Letta.BlockResponse[] = [];
-    for await (const block of client.agents.blocks.list(agentId)) {
-      blocks.push(block);
-    }
-    return blocks;
-  },
-
-  /** Get a specific memory block */
-  getMemoryBlock: async (agentId: string, label: string) => {
-    const client = getLettaClient();
-    return await client.agents.blocks.retrieve(label, { agent_id: agentId });
-  },
-
-  /** Update a memory block */
-  updateMemoryBlock: async (agentId: string, label: string, value: string) => {
-    const client = getLettaClient();
-    return await client.agents.blocks.update(label, {
-      agent_id: agentId,
-      value,
-    });
-  },
-
-  /** List agent's tools */
-  getTools: async (agentId: string) => {
-    const client = getLettaClient();
-    const tools: Letta.Tool[] = [];
-    for await (const tool of client.agents.tools.list(agentId)) {
-      tools.push(tool);
-    }
-    return tools;
-  },
-
-  /** Attach tool to agent */
-  attachTool: async (agentId: string, toolId: string) => {
-    const client = getLettaClient();
-    return await client.agents.tools.attach(toolId, { agent_id: agentId });
-  },
-
-  /** Detach tool from agent */
-  detachTool: async (agentId: string, toolId: string) => {
-    const client = getLettaClient();
-    return await client.agents.tools.detach(toolId, { agent_id: agentId });
-  },
-
-  /** List all available tools */
-  listAllTools: async () => {
-    const client = getLettaClient();
-    const tools: Letta.Tool[] = [];
-    for await (const tool of client.tools.list()) {
-      tools.push(tool);
-    }
-    return tools;
-  },
-
-  /**
-   * List all available LLM models from the Letta server.
-   * Shape matches the ModelOption type expected by the wizard.
-   */
-  listAllModels: async (): Promise<Array<{
-    id: string;
-    name: string;
-    provider: string;
-    description?: string;
-    contextWindow?: number;
-  }>> => {
-    const client = getLettaClient();
-    const models = await client.models.list();
-    return models.map((m) => {
-      const raw = m as unknown as {
-        handle?: string | null;
-        model?: string;
-        display_name?: string | null;
-        context_window?: number;
-        model_endpoint_type?: string;
-      };
-      const id = raw.handle || raw.model || 'unknown';
-      const provider = id.includes('/') ? id.split('/')[0] : (raw.model_endpoint_type ?? 'unknown');
-      return {
-        id,
-        name: raw.display_name || id.split('/').pop() || id,
-        provider,
-        contextWindow: raw.context_window,
-      };
-    });
-  },
-
-  /** Get passages (archival memory) */
-  getPassages: async (agentId: string, search?: string, limit = 20) => {
-    const client = getLettaClient();
-    const options = search ? { search, limit } : { limit };
-    // Note: passages.list returns an array directly, not a page promise
-    return await client.agents.passages.list(agentId, options);
-  },
-
-  /** Create passage (archival memory) */
-  createPassage: async (agentId: string, text: string) => {
-    const client = getLettaClient();
-    return await client.agents.passages.create(agentId, { text });
-  },
-
-  /** Delete passage */
-  deletePassage: async (agentId: string, passageId: string) => {
-    const client = getLettaClient();
-    return await client.agents.passages.delete(passageId, { agent_id: agentId });
-  },
-};
-
-// =============================================================================
-// Conversation API
-// =============================================================================
-
-export const conversationsApi = {
-  /** List all conversations for an agent */
-  listConversations: async (agentId: string): Promise<Letta.Conversation[]> => {
-    const client = getLettaClient();
-    return await client.conversations.list({ agent_id: agentId });
-  },
-
-  /** Create a new conversation for an agent */
-  createConversation: async (agentId: string): Promise<Letta.Conversation> => {
-    const client = getLettaClient();
-    return await client.conversations.create({ agent_id: agentId });
-  },
-
-  /** Delete a conversation */
-  deleteConversation: async (conversationId: string): Promise<void> => {
-    const client = getLettaClient();
-    await client.conversations.delete(conversationId);
-  },
-};
-
-// =============================================================================
-// Deploy API
+// Deploy API (mock)
 // =============================================================================
 
 export const deployApi = {
   /** Get deployment status for an agent */
   getDeployStatus: async (agentId: string): Promise<DeployedChannel[]> => {
-    // Mock implementation - returns dummy data
     console.log(`[deployApi] Getting status for agent ${agentId}`);
     return Promise.resolve([
-      {
-        type: 'matrix',
-        name: 'Matrix Bridge',
-        status: 'disconnected',
-      },
-      {
-        type: 'telegram',
-        name: 'Telegram Bot',
-        status: 'disconnected',
-      },
+      { type: 'matrix', name: 'Matrix Bridge', status: 'disconnected' },
+      { type: 'telegram', name: 'Telegram Bot', status: 'disconnected' },
     ]);
   },
 
   /** Undeploy a specific channel for an agent */
   undeployChannel: async (agentId: string, type: ChannelType): Promise<{ success: boolean }> => {
-    // Mock implementation
     console.log(`[deployApi] Undeploying ${type} channel for agent ${agentId}`);
     return Promise.resolve({ success: true });
   },
 
   /** Deploy an agent to configured channels */
   deployAgent: async (agentId: string, config: DeployConfig): Promise<{ success: boolean; channels: DeployedChannel[]; message?: string }> => {
-    // Mock implementation
     console.log(`[deployApi] Deploying agent ${agentId} to channels:`, config.channels);
     const deployedChannels: DeployedChannel[] = config.channels.map((channel) => {
       const base: DeployedChannel = {
@@ -337,15 +216,11 @@ export const deployApi = {
       return base;
     });
 
-    return Promise.resolve({
-      success: true,
-      channels: deployedChannels,
-    });
+    return Promise.resolve({ success: true, channels: deployedChannels });
   },
 
   /** Get available Matrix rooms */
   getMatrixRooms: async (): Promise<Array<{ id: string; name: string; topic?: string }>> => {
-    // Mock implementation
     return Promise.resolve([
       { id: '!example:matrix.org', name: 'General', topic: 'General discussion' },
       { id: '!dev:matrix.org', name: 'Development', topic: 'Dev chat' },
@@ -354,7 +229,6 @@ export const deployApi = {
 
   /** Get available Telegram chats */
   getTelegramChats: async (): Promise<Array<{ id: string; name: string; type: 'user' | 'group' }>> => {
-    // Mock implementation
     return Promise.resolve([
       { id: '123456789', name: 'Personal', type: 'user' },
       { id: '-987654321', name: 'Team Group', type: 'group' },
@@ -363,12 +237,160 @@ export const deployApi = {
 };
 
 // =============================================================================
-// Legacy combined export for compatibility
+// System API (server capabilities, health, external features)
 // =============================================================================
 
-export const api = {
-  ...agentsApi,
-  ...conversationsApi,
-};
+export type ExternalMemfsPatch = 'core' | 'optional1' | 'optional2';
 
-export default api;
+export interface ExternalMemfsStatus {
+  /** Whether external memfs core patch is detected on the server */
+  available: boolean;
+  /** Per-patch detection. Optional patches are not externally observable
+   *  without a dedicated health route; `optionalsKnown=false` means we
+   *  cannot tell, not that they are absent. */
+  patches: {
+    core: boolean;
+    optional1: boolean;
+    optional2: boolean;
+  };
+  /** True iff we have a real signal for the optional patches (i.e. a
+   *  dedicated /v1/external-memfs/health endpoint exists). */
+  optionalsKnown: boolean;
+  /** Human-readable summary */
+  summary: 'none' | 'core' | 'core_optional1' | 'core_optional2' | 'core_all';
+  /** Server version if available */
+  serverVersion?: string;
+  /** Error message if detection failed */
+  error?: string;
+}
+
+/** OpenAPI path that the server_memory_sync_endpoint.patch adds. Presence of
+ *  this path in /openapi.json is our deterministic signal that the core
+ *  external-memfs patch is applied to the connected server. */
+const SYNC_FROM_GIT_PATH = '/v1/agents/{agent_id}/memory/sync-from-git';
+
+function summarizePatches(p: { core: boolean; optional1: boolean; optional2: boolean }): ExternalMemfsStatus['summary'] {
+  if (!p.core) return 'none';
+  if (p.optional1 && p.optional2) return 'core_all';
+  if (p.optional1) return 'core_optional1';
+  if (p.optional2) return 'core_optional2';
+  return 'core';
+}
+
+export const systemApi = {
+  /**
+   * Detect external memfs capabilities on the connected server.
+   *
+   * Detection strategy:
+   *   1. Try a dedicated /v1/external-memfs/health endpoint. None of the
+   *      shipped patches add this today, but a future patch (or a server
+   *      you're running) might — if it does, prefer that signal because
+   *      it's the only way to know about the optional patches.
+   *   2. Fall back to fetching /openapi.json and looking for the
+   *      sync-from-git route. That route is added by the core patch and
+   *      is the cleanest external probe we have. Optional patches do not
+   *      add routes, so this fallback can detect core but not optionals.
+   */
+  detectExternalMemfs: async (): Promise<ExternalMemfsStatus> => {
+    const baseURL = getApiBase();
+    const apiKey = getApiKey();
+    const headers: Record<string, string> = {};
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+    const root = baseURL.replace(/\/$/, '');
+
+    // 1. Optional dedicated health endpoint (future patch).
+    try {
+      const res = await fetch(`${root}/v1/external-memfs/health`, { headers });
+      if (res.ok) {
+        const data = await res.json() as {
+          core?: boolean;
+          delete_propagation?: boolean;
+          system_only_blocks?: boolean;
+          optional1?: boolean;
+          optional2?: boolean;
+          version?: string;
+        };
+        const patches = {
+          core: data.core ?? false,
+          optional1: data.delete_propagation ?? data.optional1 ?? false,
+          optional2: data.system_only_blocks ?? data.optional2 ?? false,
+        };
+        return {
+          available: patches.core,
+          patches,
+          optionalsKnown: true,
+          summary: summarizePatches(patches),
+          serverVersion: data.version,
+        };
+      }
+    } catch {
+      // Health endpoint absent — fall through to openapi probe.
+    }
+
+    // 2. Probe /openapi.json for the sync-from-git route.
+    try {
+      const res = await fetch(`${root}/openapi.json`, { headers });
+      if (!res.ok) {
+        return {
+          available: false,
+          patches: { core: false, optional1: false, optional2: false },
+          optionalsKnown: false,
+          summary: 'none',
+          error: `openapi.json returned ${res.status}`,
+        };
+      }
+      const spec = await res.json() as { paths?: Record<string, unknown> };
+      const corePresent = !!spec.paths && SYNC_FROM_GIT_PATH in spec.paths;
+      const patches = {
+        core: corePresent,
+        optional1: false,
+        optional2: false,
+      };
+      return {
+        available: corePresent,
+        patches,
+        optionalsKnown: false,
+        summary: corePresent ? 'core' : 'none',
+      };
+    } catch (err) {
+      return {
+        available: false,
+        patches: { core: false, optional1: false, optional2: false },
+        optionalsKnown: false,
+        summary: 'none',
+        error: err instanceof Error ? err.message : 'Detection failed',
+      };
+    }
+  },
+
+  /**
+   * Check if server is reachable and get basic info
+   */
+  checkServerHealth: async (): Promise<{
+    connected: boolean;
+    version?: string;
+    error?: string;
+  }> => {
+    const baseURL = getApiBase();
+    const apiKey = getApiKey();
+    const headers: Record<string, string> = {};
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+    try {
+      const response = await fetch(`${baseURL.replace(/\/$/, '')}/v1/agents/`, {
+        method: 'GET',
+        headers,
+      });
+
+      if (response.ok || response.status === 200) {
+        return { connected: true };
+      }
+      return { connected: false, error: `Server returned ${response.status}` };
+    } catch (err) {
+      return {
+        connected: false,
+        error: err instanceof Error ? err.message : 'Connection failed',
+      };
+    }
+  },
+};

@@ -12,6 +12,7 @@ export interface Config {
   windowHeight: number;
   theme: 'light' | 'dark';
   pollingInterval: number;
+  externalMemfsEnabled?: boolean;
 }
 
 export const defaultConfig: Config = {

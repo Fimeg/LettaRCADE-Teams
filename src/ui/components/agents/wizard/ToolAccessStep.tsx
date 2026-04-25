@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { agentsApi } from '../../../services/api';
+import { getLettaClient } from '../../../services/api';
+import type { Letta } from '@letta-ai/letta-client';
 
 interface ToolAccessStepProps {
   selectedTools: string[];
@@ -26,7 +27,9 @@ export function ToolAccessStep({ selectedTools, onChange }: ToolAccessStepProps)
   const loadTools = async () => {
     try {
       setLoading(true);
-      const allTools = await agentsApi.listAllTools();
+      const client = getLettaClient();
+      const allTools: Letta.Tool[] = [];
+      for await (const t of client.tools.list()) allTools.push(t);
       // SDK Tool.name is string | null | undefined; coerce for local type.
       const normalized: Tool[] = allTools.map((t) => ({
         id: t.id,

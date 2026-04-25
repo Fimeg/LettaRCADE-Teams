@@ -211,6 +211,18 @@ app.on("ready", () => {
         return appConfig;
     });
 
+    // Whitelisted env snapshot for the renderer's Settings panel. Secrets are
+    // never sent — booleans reflect presence only.
+    ipcMainHandle("get-runtime-env", (): RuntimeEnv => ({
+        LETTA_BASE_URL: process.env.LETTA_BASE_URL,
+        LETTA_CODE_CLI_PATH: process.env.LETTA_CODE_CLI_PATH,
+        LETTA_MEMFS_LOCAL: process.env.LETTA_MEMFS_LOCAL,
+        LETTA_MEMFS_GIT_URL: process.env.LETTA_MEMFS_GIT_URL,
+        apiKeySet: !!process.env.LETTA_API_KEY,
+        memfsGitTokenSet: !!process.env.LETTA_MEMFS_GIT_TOKEN,
+        cwd: process.cwd(),
+    }));
+
     // Handle directory selection
     ipcMainHandle("select-directory", async () => {
         const result = await dialog.showOpenDialog(mainWindow!, {
@@ -245,27 +257,52 @@ app.on("ready", () => {
         mainWindow?.webContents.send("letta-code:log", entry);
     });
 
-    ipcMain.handle("letta-code:get-status", () => lettaCode.getStatus());
-
-    ipcMain.handle("letta-code:spawn", async (_event, opts: { cwd?: string } = {}) => {
-        if (!proxyHandle) {
-            throw new Error("proxy server not ready yet");
-        }
-        // Keep proxy upstream in sync with latest saved config
-        proxyHandle.setUpstream(
-            appConfig.serverUrl || "http://localhost:8283",
-            appConfig.apiKey || "",
-        );
-        await lettaCode.spawn({
-            proxyPort: proxyHandle.port,
-            sessionToken: proxyHandle.sessionToken,
-            cwd: opts.cwd,
-        });
+    ipcMain.handle("letta-code:get-status", () => {
+        console.log("[ipc:letta-code:get-status] current status:", lettaCode.getStatus());
         return lettaCode.getStatus();
     });
 
+    ipcMain.handle("letta-code:spawn", async (_event, opts: { cwd?: string; serverUrl?: string; apiKey?: string } = {}) => {
+        console.log("[ipc:letta-code:spawn] Spawn requested with opts:", { ...opts, apiKey: opts.apiKey ? "(set)" : "(unset)" });
+        console.log("[ipc:letta-code:spawn] proxyHandle:", proxyHandle ? `port=${proxyHandle.port}` : "null");
+
+        if (!proxyHandle) {
+            const errMsg = "proxy server not ready yet";
+            console.error(`[ipc:letta-code:spawn] ${errMsg}`);
+            throw new Error(errMsg);
+        }
+        // Renderer-supplied creds win — they reflect what the user actually
+        // configured in the Settings panel (localStorage). Fall back to the
+        // main-process appConfig file only when the renderer didn't pass any.
+        const upstreamUrl = opts.serverUrl || appConfig.serverUrl || "http://localhost:8283";
+        const upstreamKey = opts.apiKey ?? appConfig.apiKey ?? "";
+        if (opts.serverUrl || opts.apiKey) {
+            // Persist so subsequent spawns / restarts have it.
+            appConfig = { ...appConfig, serverUrl: upstreamUrl, apiKey: upstreamKey };
+            saveConfig(appConfig);
+        }
+        proxyHandle.setUpstream(upstreamUrl, upstreamKey);
+        try {
+            await lettaCode.spawn({
+                proxyPort: proxyHandle.port,
+                sessionToken: proxyHandle.sessionToken,
+                cwd: opts.cwd,
+            });
+            const status = lettaCode.getStatus();
+            console.log("[ipc:letta-code:spawn] Spawn successful, status:", status);
+            return status;
+        } catch (err) {
+            const errorMsg = err instanceof Error ? err.message : String(err);
+            console.error("[ipc:letta-code:spawn] Spawn failed:", errorMsg);
+            throw err;
+        }
+    });
+
     ipcMain.handle("letta-code:stop", async () => {
+        console.log("[ipc:letta-code:stop] Stop requested");
         await lettaCode.stop();
-        return lettaCode.getStatus();
+        const status = lettaCode.getStatus();
+        console.log("[ipc:letta-code:stop] Status after stop:", status);
+        return status;
     });
 })
