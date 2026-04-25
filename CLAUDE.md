@@ -177,8 +177,8 @@ The legacy `agentsApi`, `conversationsApi`, and combined `api` exports are
 Patterns that recur in this codebase. Follow these before inventing new ones.
 
 **Direct SDK, no wrappers.** See "API Service Location" above. The migration
-plan in `docs/plans/MIGRATE_TO_DIRECT_SDK.md` records the rationale and
-file-by-file work.
+migration that landed in 2026-04-25 (the wrapper layer we ripped out is the
+relevant rationale).
 
 **`agent.raw` carries the full server object.** `useAppStore.loadAgent` stashes
 the SDK's `AgentState` response under `agent.raw`. Downstream consumers
