@@ -31,6 +31,12 @@ export async function startProxyServer(
 
   const app = express();
 
+  // Logging middleware to debug CLI requests
+  app.use((req, res, next) => {
+    console.log(`[proxy] ${req.method} ${req.url} - auth: ${req.headers.authorization ? "present" : "missing"}`);
+    next();
+  });
+
   app.use((req, res, next) => {
     const auth = req.headers.authorization ?? "";
     const expected = `Bearer ${sessionToken}`;
@@ -38,6 +44,7 @@ export async function startProxyServer(
       next();
       return;
     }
+    console.log(`[proxy] Auth failed. Got: "${auth.substring(0, 20)}...", expected: "${expected.substring(0, 20)}..."`);
     res.status(401).json({ error: "invalid session token" });
   });
 

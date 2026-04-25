@@ -1,10 +1,16 @@
 import { MemoryBlock } from '../store/useAppStore';
+import { countTokens } from './tokens';
 
 export interface BlockHealth {
   label: string;
+  /** Character count of the block's value — matches the server's `limit` units. */
   currentLength: number;
+  /** Character limit set on the block (0 = no limit). */
   limit: number;
+  /** chars / limit, in [0, ∞). */
   pressure: number;
+  /** Real tiktoken count (cl100k_base) for display. */
+  tokens: number;
   tier: string;
 }
 
@@ -14,6 +20,8 @@ export interface MemoryHealth {
   blockHealths: BlockHealth[];
   totalBlocks: number;
   blocksWithLimits: number;
+  /** Sum of real tokens across all blocks. */
+  totalTokens: number;
 }
 
 export function classifyTier(label: string): string {
@@ -26,7 +34,7 @@ export function classifyTier(label: string): string {
 
 export function calculateMemoryHealth(blocks: MemoryBlock[]): MemoryHealth {
   const blockHealths: BlockHealth[] = blocks.map(block => {
-    const value = typeof block.value === 'string' ? block.value : '';
+    const value = extractBlockValue(block);
     const currentLength = value.length;
     const limit = block.limit ?? 0;
     const pressure = limit > 0 ? currentLength / limit : 0;
@@ -36,6 +44,7 @@ export function calculateMemoryHealth(blocks: MemoryBlock[]): MemoryHealth {
       currentLength,
       limit,
       pressure,
+      tokens: countTokens(value),
       tier: classifyTier(block.label),
     };
   });
@@ -51,7 +60,20 @@ export function calculateMemoryHealth(blocks: MemoryBlock[]): MemoryHealth {
     blockHealths,
     totalBlocks: blocks.length,
     blocksWithLimits: blocksWithLimits.length,
+    totalTokens: blockHealths.reduce((sum, bh) => sum + bh.tokens, 0),
   };
+}
+
+/** Resolve a block's text from either the new `content` field (SDK 0.1.14+)
+ *  or the legacy `value` field. Returns '' if neither yields a string. */
+function extractBlockValue(block: MemoryBlock): string {
+  if (typeof block.value === 'string') return block.value;
+  if (typeof block.content === 'string') return block.content;
+  if (block.content && typeof block.content === 'object' && 'text' in block.content) {
+    const t = (block.content as { text?: unknown }).text;
+    if (typeof t === 'string') return t;
+  }
+  return '';
 }
 
 export function getPressureColor(pressure: number): string {

@@ -1,5 +1,5 @@
 {
-	"name": "letta-cowork",
+	"name": "letta-community-ade",
 	"private": true,
 	"version": "0.1.0",
 	"type": "module",
@@ -29,6 +29,7 @@
 		"express": "5.2.1",
 		"highlight.js": "^11.11.1",
 		"http-proxy-middleware": "3.0.5",
+		"js-tiktoken": "1.0.21",
 		"os-utils": "^0.0.14",
 		"react": "^19.2.3",
 		"react-dom": "^19.2.3",

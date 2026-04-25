@@ -1,9 +1,10 @@
 import { create } from 'zustand';
-import { agentsApi, conversationsApi } from '../services/api';
+import { Letta } from '@letta-ai/letta-client';
+import { getLettaClient } from '../services/api';
 import type { Conversation as ApiConversation } from '../services/api';
 import type { ServerEvent, SessionStatus, StreamMessage } from "../types";
 
-export type TopTab = 'agents' | 'models' | 'settings';
+export type TopTab = 'home' | 'agents' | 'teams' | 'settings';
 
 export interface AgentSummary {
   id: string;
@@ -12,6 +13,70 @@ export interface AgentSummary {
   model?: string | null;
   toolCount?: number;
   createdAt?: string | null;
+  lastRun?: string | null;
+  conversationCount?: number;
+  tags?: string[];
+  /** Resolved at list time so card-level UI can render a chip without
+   *  digging into raw memory shapes. Reads `agent.memory.git_enabled`
+   *  (canonical) and falls back to the `git-memory-enabled` tag. */
+  memfsEnabled?: boolean;
+  /** Number of non-archived conversations idle ≥ STALE_CONVERSATION_DAYS.
+   *  Populated lazily when an agent is opened (loadAgent), so unopened
+   *  agents show no badge until first inspection. */
+  staleConversationCount?: number;
+}
+
+export const MEMFS_AGENT_TAG = 'git-memory-enabled';
+
+/** Canonical memfs detection.
+ *
+ *  Signals, in priority order:
+ *    1. `agent.memory.git_enabled === true` (authoritative — server flips
+ *       this on `/memfs enable` or a PATCH).
+ *    2. `git-memory-enabled` tag present (legacy fallback; unreliable
+ *       across Letta server versions).
+ *    3. Any memory block has a path-style label (`a/b.md`). This is a
+ *       structural signal — only memfs-enabled agents end up with
+ *       slash-delimited block labels in practice. We need this fallback
+ *       because some SDK retrieve responses omit `memory.git_enabled`,
+ *       leaving the UI unable to recognize an already-enabled agent.
+ *
+ *  Pass the full agent record (or `agent.raw`) plus optionally the loaded
+ *  `memoryBlocks`. The legacy `(tags)` call shape is kept for back-compat
+ *  and uses tag-only detection.
+ */
+export function isMemfsEnabledAgent(
+  input?:
+    | {
+        memory?: { git_enabled?: boolean } | null;
+        tags?: string[] | null;
+        memoryBlocks?: Array<{ label?: string | null }> | null;
+      }
+    | string[]
+    | null,
+): boolean {
+  if (!input) return false;
+  if (Array.isArray(input)) {
+    return input.includes(MEMFS_AGENT_TAG);
+  }
+  if (input.memory?.git_enabled === true) return true;
+  if (Array.isArray(input.tags) && input.tags.includes(MEMFS_AGENT_TAG)) return true;
+  if (Array.isArray(input.memoryBlocks) && input.memoryBlocks.some((b) => typeof b?.label === 'string' && b.label.includes('/'))) {
+    return true;
+  }
+  return false;
+}
+
+const STALE_CONVERSATION_DAYS = 14;
+const STALE_CONVERSATION_MS = STALE_CONVERSATION_DAYS * 24 * 60 * 60 * 1000;
+
+export function isConversationStale(conv: { archived?: boolean; last_message_at?: string | null; updated_at?: string | null; created_at?: string | null }): boolean {
+  if (conv.archived) return false;
+  const ts = conv.last_message_at ?? conv.updated_at ?? conv.created_at ?? null;
+  if (!ts) return false;
+  const t = Date.parse(ts);
+  if (Number.isNaN(t)) return false;
+  return Date.now() - t > STALE_CONVERSATION_MS;
 }
 
 export type PermissionRequest = {
@@ -132,6 +197,8 @@ interface AppState {
   serverConnected: boolean | null;
   activeConversationId: string | null;
   lastConversationPerAgent: Record<string, string>;
+  /** Persisted favorite agent ID for the "home" dashboard view */
+  favoriteAgentId: string | null;
   prompt: string;
   cwd: string;
   pendingStart: boolean;
@@ -150,8 +217,15 @@ interface AppState {
   setActiveSessionId: (id: string | null) => void;
   setSelectedAgentId: (id: string | null) => void;
   setActiveTab: (tab: TopTab) => void;
+  // Atomic navigation helper for the Companion / Home dashboard buttons.
+  // Sets selectedAgentId + activeTab in one mutation so the workspace
+  // doesn't render against half-applied state. (Two separate store calls
+  // worked in theory but the Home → Chat handoff was unreliable in
+  // practice — see UI/UX punch list, session 5.)
+  navigateToAgent: (id: string, tab?: TopTab) => void;
   setServerConnected: (connected: boolean | null) => void;
   setActiveConversationId: (id: string | null) => void;
+  setFavoriteAgentId: (id: string | null) => void;
   loadAgentList: () => Promise<void>;
   loadAgent: (id: string) => Promise<void>;
   deleteAgent: (id: string) => Promise<void>;
@@ -208,6 +282,23 @@ function createSession(id: string): SessionView {
   return { id, title: "", status: "idle", messages: [], permissionRequests: [], hydrated: false };
 }
 
+const FAVORITE_AGENT_KEY = 'letta-community-ade:favorite-agent';
+
+function getStoredFavorite(): string | null {
+  try {
+    return localStorage.getItem(FAVORITE_AGENT_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setStoredFavorite(id: string | null) {
+  try {
+    if (id) localStorage.setItem(FAVORITE_AGENT_KEY, id);
+    else localStorage.removeItem(FAVORITE_AGENT_KEY);
+  } catch { /* ignore */ }
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   sessions: {},
   activeSessionId: null,
@@ -216,10 +307,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   agentList: [],
   agentsLoading: false,
   agentsError: null,
-  activeTab: 'agents',
+  activeTab: 'home',
   serverConnected: null,
   activeConversationId: null,
   lastConversationPerAgent: {},
+  favoriteAgentId: getStoredFavorite(),
   prompt: "",
   cwd: "",
   pendingStart: false,
@@ -240,7 +332,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     activeConversationId: id ? (state.lastConversationPerAgent[id] ?? null) : null,
   })),
   setActiveTab: (activeTab) => set({ activeTab }),
+  navigateToAgent: (id, tab = 'agents') => set((state) => ({
+    selectedAgentId: id,
+    activeTab: tab,
+    activeConversationId: id ? (state.lastConversationPerAgent[id] ?? null) : null,
+  })),
   setServerConnected: (serverConnected) => set({ serverConnected }),
+  setFavoriteAgentId: (id) => {
+    setStoredFavorite(id);
+    set({ favoriteAgentId: id });
+  },
   setActiveConversationId: (activeConversationId) => set((state) => {
     const agentId = state.selectedAgentId;
     if (!agentId) return { activeConversationId };
@@ -256,16 +357,35 @@ export const useAppStore = create<AppState>((set, get) => ({
   loadAgentList: async () => {
     set({ agentsLoading: true, agentsError: null });
     try {
-      const list = await agentsApi.listAgents();
-      const summaries: AgentSummary[] = list.map((a) => ({
-        id: a.id,
-        name: a.name,
-        description: a.description ?? null,
-        model: a.model ?? null,
-        // @ts-expect-error — community-ade returns toolCount but base Agent type doesn't declare it
-        toolCount: typeof a.toolCount === 'number' ? a.toolCount : undefined,
-        createdAt: a.created_at ?? null,
-      }));
+      const client = getLettaClient();
+      const list: Letta.AgentState[] = [];
+      for await (const agent of client.agents.list()) {
+        list.push(agent);
+      }
+      const summaries: AgentSummary[] = list.map((a) => {
+        const anyA = a as unknown as Record<string, unknown>;
+        const tools = anyA.tools as unknown[] | undefined;
+        const toolCount = typeof anyA.toolCount === 'number'
+          ? (anyA.toolCount as number)
+          : Array.isArray(tools) ? tools.length : undefined;
+        const rawTags = anyA.tags;
+        const tags = Array.isArray(rawTags)
+          ? rawTags.filter((t): t is string => typeof t === 'string')
+          : undefined;
+        const memory = anyA.memory as { git_enabled?: boolean } | null | undefined;
+        const memfsEnabled = isMemfsEnabledAgent({ memory, tags });
+        return {
+          id: a.id,
+          name: a.name,
+          description: a.description ?? null,
+          model: a.model ?? null,
+          toolCount,
+          createdAt: a.created_at ?? null,
+          lastRun: (anyA.last_run_completion as string | null | undefined) ?? null,
+          tags,
+          memfsEnabled,
+        };
+      });
       set({ agentList: summaries, agentsLoading: false });
     } catch (err) {
       set({
@@ -277,11 +397,22 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   loadAgent: async (id) => {
     try {
-      // Fetch agent detail and conversations in parallel — the SDK's agents.get()
-      // does not return nested conversations, so list them separately.
-      const [detail, conversations] = await Promise.all([
-        agentsApi.getAgent(id),
-        conversationsApi.listConversations(id).catch((err) => {
+      const client = getLettaClient();
+      // Fetch agent detail, blocks, and conversations in parallel.
+      // Note: SDK agents.retrieve() does NOT include blocks — fetch separately.
+      const [detail, blocks, conversations] = await Promise.all([
+        client.agents.retrieve(id),
+        (async () => {
+          try {
+            const out: Letta.BlockResponse[] = [];
+            for await (const b of client.agents.blocks.list(id)) out.push(b);
+            return out;
+          } catch (err) {
+            console.error('[useAppStore] Failed to load memory blocks:', err);
+            return [] as Letta.BlockResponse[];
+          }
+        })(),
+        client.conversations.list({ agent_id: id }).catch((err) => {
           console.error('[useAppStore] Failed to list conversations:', err);
           return [] as ApiConversation[];
         }),
@@ -293,8 +424,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       const raw = detail as unknown as Record<string, unknown>;
       const llm = (raw.llm_config as Record<string, unknown> | undefined) ?? {};
 
-      // FIX: Handle null/undefined id and label with proper defaults
-      const memoryBlocks: MemoryBlock[] = detail.blocks.map((b) => {
+      // Map blocks from SDK response
+      const memoryBlocks: MemoryBlock[] = blocks.map((b) => {
         // Extract text from either new `content` field or legacy `value` field
         const extractedText = extractBlockText(
           (b as { content?: unknown }).content ?? (b as { value?: unknown }).value,
@@ -344,8 +475,14 @@ export const useAppStore = create<AppState>((set, get) => ({
         updatedAt: nowUpdated,
       };
 
+      const staleConversationCount = conversations.filter(isConversationStale).length;
       set((state) => ({
         agents: { ...state.agents, [id]: agent },
+        agentList: state.agentList.map((s) =>
+          s.id === id
+            ? { ...s, conversationCount: conversations.length, staleConversationCount }
+            : s,
+        ),
       }));
 
       // Auto-select a conversation if none active. Prefer the last one the
@@ -366,7 +503,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   deleteAgent: async (id) => {
     try {
-      await agentsApi.deleteAgent(id);
+      await getLettaClient().agents.delete(id);
       set((state) => {
         const nextAgents = { ...state.agents };
         delete nextAgents[id];
@@ -401,10 +538,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       };
     });
     try {
+      const client = getLettaClient();
       if (nextEnabled) {
-        await agentsApi.attachTool(agentId, toolId);
+        await client.agents.tools.attach(toolId, { agent_id: agentId });
       } else {
-        await agentsApi.detachTool(agentId, toolId);
+        await client.agents.tools.detach(toolId, { agent_id: agentId });
       }
     } catch (err) {
       console.error('[useAppStore] Failed to toggle tool:', err);
@@ -428,7 +566,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   updateAgent: async (id, updates) => {
     try {
-      await agentsApi.updateAgent(id, updates as Parameters<typeof agentsApi.updateAgent>[1]);
+      await getLettaClient().agents.update(id, updates as Letta.AgentUpdateParams);
       // Refresh agent data after update
       await get().loadAgent(id);
     } catch (err) {
@@ -440,7 +578,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   createConversation: async (agentId) => {
     try {
-      const conv = await conversationsApi.createConversation(agentId);
+      const conv = await getLettaClient().conversations.create({ agent_id: agentId });
       // Refresh agent to get updated conversations list
       await get().loadAgent(agentId);
       return conv;
@@ -453,7 +591,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   deleteConversation: async (conversationId) => {
     try {
-      await conversationsApi.deleteConversation(conversationId);
+      await getLettaClient().conversations.delete(conversationId);
       // Refresh current agent to get updated conversations list
       const agentId = get().selectedAgentId;
       if (agentId) {
@@ -495,12 +633,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     // Sync to API (community-ade uses label as identifier)
     // API expects `value` field (legacy format)
+    const client = getLettaClient();
     try {
-      await agentsApi.updateMemoryBlock(agentId, blockLabel, newValue);
+      await client.agents.blocks.update(blockLabel, { agent_id: agentId, value: newValue });
     } catch (error) {
       console.error('[useAppStore] Failed to update memory block:', error);
       // Revert on error by re-fetching
-      const blocks = await agentsApi.getMemoryBlocks(agentId);
+      const blocks: Letta.BlockResponse[] = [];
+      for await (const b of client.agents.blocks.list(agentId)) blocks.push(b);
       // FIX: Map BlockResponse to MemoryBlock with proper null-safety
       const mappedBlocks: MemoryBlock[] = blocks.map((b) => ({
         id: (b.id || b.label || 'unknown') as string,
@@ -779,7 +919,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ messagesAbortController: abortController });
 
     try {
-      const client = (await import('../services/api')).getLettaClient();
+      const client = getLettaClient();
       const page = await client.conversations.messages.list(conversationId, {
         limit: 200,
         order: "asc",

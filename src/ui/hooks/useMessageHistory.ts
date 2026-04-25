@@ -1,7 +1,6 @@
 import { useState, useCallback, useRef } from "react";
 import { getLettaClient } from "../services/api";
-import type { Message, UserMessage, AssistantMessage, SystemMessage, ToolCallMessage } from "@letta-ai/letta-client/resources/agents/messages";
-import type { ToolReturnMessage } from "@letta-ai/letta-client/resources/tools";
+import type { Message, UserMessage, AssistantMessage, SystemMessage } from "@letta-ai/letta-client/resources/agents/messages";
 import type { StreamMessage } from "../types";
 
 interface UseMessageHistoryReturn {
@@ -41,12 +40,15 @@ function extractContent(content: unknown): string {
 }
 
 /**
- * Transform SDK Message to UI StreamMessage format
- * Returns compatible types: UserPromptMessage, SystemMessage, or SDKMessage
+ * Transform a Letta server REST API message (message_type: ...) into the UI's
+ * SDKMessage shape (type: ...). The UI's MessageCard switches on `type`, so
+ * passing raw REST messages through causes them to render as null — that's the
+ * bug where assistant replies flash during streaming then vanish on history
+ * refetch. Normalize to the SDKMessage shape the UI expects.
  */
 function transformMessage(msg: Message): StreamMessage | null {
-  // Get message type from the message_type field
   const messageType = (msg as { message_type?: string }).message_type;
+  const uuid = (msg as { id?: string }).id;
 
   switch (messageType) {
     case "user_message": {
@@ -58,34 +60,67 @@ function transformMessage(msg: Message): StreamMessage | null {
     }
 
     case "assistant_message": {
-      // Return as SDKMessage - the SDK assistant message type
       const assistantMsg = msg as AssistantMessage;
-      return assistantMsg as unknown as StreamMessage;
+      return {
+        type: "assistant",
+        uuid,
+        content: extractContent(assistantMsg.content),
+      } as unknown as StreamMessage;
+    }
+
+    case "reasoning_message": {
+      const reasoningMsg = msg as unknown as { reasoning?: string; content?: unknown };
+      const reasoningText = reasoningMsg.reasoning ?? extractContent(reasoningMsg.content);
+      return {
+        type: "reasoning",
+        uuid,
+        content: reasoningText,
+      } as unknown as StreamMessage;
+    }
+
+    case "tool_call_message": {
+      const tcWrapper = msg as unknown as {
+        tool_call?: { name?: string; arguments?: unknown; tool_call_id?: string };
+      };
+      const tc = tcWrapper.tool_call ?? {};
+      let toolInput: unknown = tc.arguments ?? {};
+      if (typeof toolInput === "string") {
+        try { toolInput = JSON.parse(toolInput); } catch { /* leave as string */ }
+      }
+      return {
+        type: "tool_call",
+        uuid,
+        toolCallId: tc.tool_call_id || uuid || "",
+        toolName: tc.name || "unknown",
+        toolInput,
+      } as unknown as StreamMessage;
+    }
+
+    case "tool_return_message": {
+      const trMsg = msg as unknown as {
+        tool_return?: string;
+        status?: string;
+        tool_call_id?: string;
+      };
+      return {
+        type: "tool_result",
+        uuid,
+        toolCallId: trMsg.tool_call_id || "",
+        content: trMsg.tool_return || "",
+        isError: trMsg.status === "error",
+      } as unknown as StreamMessage;
     }
 
     case "system_message": {
       const systemMsg = msg as SystemMessage;
       return {
         type: "system" as const,
-        content: systemMsg.content,
+        content: extractContent(systemMsg.content),
       };
     }
 
-    case "tool_call_message": {
-      // Return as SDKMessage
-      const toolCallMsg = msg as ToolCallMessage;
-      return toolCallMsg as unknown as StreamMessage;
-    }
-
-    case "tool_return_message": {
-      // Return as SDKMessage
-      const toolReturnMsg = msg as ToolReturnMessage;
-      return toolReturnMsg as unknown as StreamMessage;
-    }
-
     default:
-      // Return other SDK message types as-is
-      return msg as unknown as StreamMessage;
+      return null;
   }
 }
 

@@ -7,7 +7,7 @@
  * work: letta-code does not listen on any port.
  */
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLettaCodeSpawn } from "../hooks/useLettaCodeSpawn";
 
 export type ConnectionMode = "server" | "local";
@@ -20,6 +20,11 @@ interface Props {
 export default function ConnectionModeIndicator({ mode, onModeChange }: Props) {
   const { available, status, spawn, stop } = useLettaCodeSpawn();
   const [spawnError, setSpawnError] = useState<string | null>(null);
+
+  // Log status changes for debugging
+  useEffect(() => {
+    console.log("[ConnectionModeIndicator] status changed:", status);
+  }, [status]);
 
   const localDisabled = !available;
   const spawnState = status.status;
@@ -49,10 +54,12 @@ export default function ConnectionModeIndicator({ mode, onModeChange }: Props) {
       await stop();
     } else {
       try {
-        await spawn();
+        console.log("[ConnectionModeIndicator] Starting spawn...");
+        const result = await spawn();
+        console.log("[ConnectionModeIndicator] Spawn completed:", result);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.error("[lettaCode] spawn failed", err);
+        console.error("[ConnectionModeIndicator] spawn failed:", err);
         setSpawnError(msg);
       }
     }
@@ -102,9 +109,15 @@ export default function ConnectionModeIndicator({ mode, onModeChange }: Props) {
             {spawnState === "running" || spawnState === "starting" ? "Stop" : "Start"}
           </button>
           {(status.error || spawnError) && (
-            <span className="text-xs text-red-600 max-w-[280px] truncate" title={spawnError || status.error}>
-              {spawnError || status.error}
-            </span>
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-red-600 font-semibold">Error:</span>
+              <span
+                className="text-xs text-red-600 max-w-[400px] break-words font-mono bg-red-50 px-2 py-1 rounded border border-red-200"
+                title={spawnError || status.error}
+              >
+                {spawnError || status.error}
+              </span>
+            </div>
           )}
         </div>
       )}

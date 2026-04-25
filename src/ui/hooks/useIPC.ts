@@ -1,13 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ServerEvent, ClientEvent } from "../types";
-import { api } from "../services/api";
-
-// Type for conversation objects returned by listConversations
-interface Conversation {
-  id: string;
-  created_at?: string | number;
-  updated_at?: string | number;
-}
+import { getLettaClient } from "../services/api";
 
 export function useIPC(onEvent: (event: ServerEvent) => void) {
   const [connected, setConnected] = useState(false);
@@ -39,11 +32,16 @@ export function useIPC(onEvent: (event: ServerEvent) => void) {
       setConnected(true);
 
       // Load initial data
-      api.listAgents().then(agents => {
-        console.log('[useIPC] Loaded', agents.length, 'agents');
-      }).catch(err => {
-        console.error('[useIPC] Failed to load agents:', err);
-      });
+      (async () => {
+        try {
+          const client = getLettaClient();
+          let count = 0;
+          for await (const _ of client.agents.list()) count++;
+          console.log('[useIPC] Loaded', count, 'agents');
+        } catch (err) {
+          console.error('[useIPC] Failed to load agents:', err);
+        }
+      })();
 
       return () => {
         setConnected(false);
@@ -63,29 +61,26 @@ export function useIPC(onEvent: (event: ServerEvent) => void) {
     console.log('[useIPC] Browser mode sendEvent:', event.type);
 
     try {
+      const client = getLettaClient();
       switch (event.type) {
         case "session.list": {
-          // Get conversations from API
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const conversations = await (api as any).listConversations('default-agent');
+          const conversations = await client.conversations.list({ agent_id: 'default-agent' });
           onEvent({
             type: "session.list",
             payload: {
-              sessions: conversations.map((c: Conversation) => ({
+              sessions: conversations.map((c) => ({
                 id: c.id,
                 title: 'Conversation ' + c.id.slice(0, 8),
                 status: 'idle',
-                createdAt: new Date(c.created_at || Date.now()).getTime(),
-                updatedAt: new Date(c.updated_at || Date.now()).getTime()
+                createdAt: c.created_at ? new Date(c.created_at).getTime() : Date.now(),
+                updatedAt: c.updated_at ? new Date(c.updated_at).getTime() : Date.now(),
               }))
             }
           });
           break;
         }
         case "session.start": {
-          // Create a new conversation
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const conv = await (api as any).createConversation('default-agent');
+          const conv = await client.conversations.create({ agent_id: 'default-agent' });
           onEvent({
             type: "session.status",
             payload: {

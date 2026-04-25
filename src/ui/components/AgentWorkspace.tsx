@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Panel, Group as PanelGroup, Separator as Separator } from "react-resizable-panels";
-import { useAppStore } from "../store/useAppStore";
+import { useAppStore, isMemfsEnabledAgent, isConversationStale } from "../store/useAppStore";
 import { useMessageWindow } from "../hooks/useMessageWindow";
 import { useIPC } from "../hooks/useIPC";
 import { useStreamingMessages } from "../hooks/useStreamingMessages";
 import { useMessageHistory } from "../hooks/useMessageHistory";
-import { agentsApi } from "../services/api";
+import { getLettaClient } from "../services/api";
+import type { Letta } from "@letta-ai/letta-client";
 import { slashCommandHandlers } from "../services/slashCommands";
 import type { ClientEvent, ServerEvent } from "../types";
 import { MessageCard } from "./EventCard";
@@ -16,6 +17,36 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { useAgentNickname } from "../hooks/useAgentNickname";
 
 const SCROLL_THRESHOLD = 50;
+const STALE_CONVERSATION_DAYS = 14;
+
+function conversationLastActivity(conv: { last_message_at?: string | null; updated_at?: string | null; created_at?: string | null }): number | null {
+  const ts = conv.last_message_at ?? conv.updated_at ?? conv.created_at ?? null;
+  if (!ts) return null;
+  const t = Date.parse(ts);
+  return Number.isNaN(t) ? null : t;
+}
+
+function conversationIdleLabel(conv: Parameters<typeof conversationLastActivity>[0]): string {
+  const t = conversationLastActivity(conv);
+  if (t === null) return '?';
+  const diff = Date.now() - t;
+  const day = 24 * 60 * 60 * 1000;
+  const week = 7 * day;
+  if (diff < 30 * day) return `${Math.floor(diff / week)}w`;
+  return `${Math.floor(diff / (30 * day))}mo`;
+}
+
+function formatConversationOption(conv: { id: string; summary?: string | null; last_message_at?: string | null; updated_at?: string | null; created_at?: string | null; archived?: boolean }): string {
+  const idTail = conv.id.slice(0, 8);
+  const summary = conv.summary?.trim();
+  const base = summary
+    ? (summary.length > 40 ? `${summary.slice(0, 38)}…` : summary)
+    : `Conversation ${idTail}`;
+  const markers: string[] = [];
+  if (conv.archived) markers.push('wrapped');
+  else if (isConversationStale(conv)) markers.push(`idle ${conversationIdleLabel(conv)}`);
+  return markers.length ? `${base} · ${markers.join(' · ')}` : base;
+}
 
 interface AgentWorkspaceProps {
   agentId: string;
@@ -71,6 +102,14 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
   const [convDeleteId, setConvDeleteId] = useState<string | null>(null);
   const [convDeleting, setConvDeleting] = useState(false);
 
+  // Save-diff preview: staged config changes awaiting user confirmation.
+  // Keys are human labels, values are {from, to} primitives/strings for display.
+  type StagedDiff = { label: string; from: unknown; to: unknown }[];
+  const [pendingChanges, setPendingChanges] = useState<{
+    updates: Record<string, unknown>;
+    diff: StagedDiff;
+  } | null>(null);
+
   // Per-agent UI nickname (localStorage-backed; does not modify the server agent)
   const { nickname, setNickname } = useAgentNickname(agentId);
 
@@ -109,12 +148,40 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
   const [hasNewMessages, setHasNewMessages] = useState(false);
   const [showCommands, setShowCommands] = useState(false);
+  // Optimistic user message: shows the just-sent user prompt instantly while
+  // the stream runs, instead of waiting for the post-stream history refetch.
+  // Cleared when the refetch returns (the server-side message takes its place).
+  const [pendingUserMessage, setPendingUserMessage] = useState<string | null>(null);
   const scrollHeightBeforeLoadRef = useRef(0);
   const shouldRestoreScrollRef = useRef(false);
   const prevMessagesLengthRef = useRef(0);
 
   // Connection mode
   const [connectionMode, setConnectionMode] = useState<ConnectionMode>('server');
+
+  // Focus mode: collapses the workspace down to just the chat stream — no
+  // settings, no memory panel, no model badge / connection chip / slash
+  // commands. Preference is persisted per agent in localStorage so the
+  // dashboard can pre-arm it before navigating (Home → Chat sets the key,
+  // we read it on mount). Independent toggle in the header lets users
+  // enter or leave focus from inside the workspace too.
+  const focusModeKey = `letta:focus-mode:${agentId}`;
+  const [focusMode, setFocusMode] = useState<boolean>(() => {
+    try { return localStorage.getItem(focusModeKey) === 'true'; } catch { return false; }
+  });
+  // Re-sync from localStorage whenever the agent changes — the Home
+  // dashboard writes the key just before navigating, so we need to honor
+  // the new value even when AgentWorkspace was already mounted (e.g. user
+  // clicked Memory then Chat for the same agent).
+  useEffect(() => {
+    try { setFocusMode(localStorage.getItem(focusModeKey) === 'true'); } catch { /* ignore */ }
+  }, [focusModeKey]);
+  useEffect(() => {
+    try {
+      if (focusMode) localStorage.setItem(focusModeKey, 'true');
+      else localStorage.removeItem(focusModeKey);
+    } catch { /* ignore quota / privacy errors */ }
+  }, [focusMode, focusModeKey]);
 
   // Input state
   const [inputValue, setInputValue] = useState('');
@@ -173,7 +240,11 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
       partialMessageRef.current += text;
       setPartialMessage(partialMessageRef.current);
       if (shouldAutoScroll) {
-        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+        // "auto" (instant) instead of "smooth": each chunk would otherwise
+        // start a new smooth-scroll animation, and Chrome's smooth-scroll
+        // can lock out user wheel/touch input mid-animation. With instant
+        // scroll, user gestures take effect immediately.
+        messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
       } else {
         setHasNewMessages(true);
       }
@@ -227,6 +298,34 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
     }
   }, [shouldAutoScroll]);
 
+  // User-initiated scroll detection: wheel-up / touchmove / page-up keys are
+  // unambiguous "I want to leave the bottom" signals. Listening to the raw
+  // events lets us drop auto-stick *immediately*, before the next stream
+  // chunk fires another scrollIntoView. Without this the chunk scroll keeps
+  // yanking the user back down because handleScroll's "at bottom" check
+  // races the programmatic scroll itself.
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const releaseAutoScroll = () => {
+      setShouldAutoScroll(false);
+      setHasNewMessages(true);
+    };
+    const onWheel = (e: WheelEvent) => { if (e.deltaY < 0) releaseAutoScroll(); };
+    const onTouchMove = () => releaseAutoScroll();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'PageUp' || e.key === 'ArrowUp' || e.key === 'Home') releaseAutoScroll();
+    };
+    container.addEventListener('wheel', onWheel, { passive: true });
+    container.addEventListener('touchmove', onTouchMove, { passive: true });
+    container.addEventListener('keydown', onKey);
+    return () => {
+      container.removeEventListener('wheel', onWheel);
+      container.removeEventListener('touchmove', onTouchMove);
+      container.removeEventListener('keydown', onKey);
+    };
+  }, []);
+
   // IntersectionObserver for infinite scroll
   useEffect(() => {
     const sentinel = topSentinelRef.current;
@@ -279,7 +378,8 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
   // Auto-scroll on new messages
   useEffect(() => {
     if (shouldAutoScroll) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      // Instant scroll — see comment in handlePartialMessages for rationale.
+      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
     } else if (messages.length > prevMessagesLengthRef.current && prevMessagesLengthRef.current > 0) {
       setHasNewMessages(true);
     }
@@ -316,63 +416,100 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
     setCfgModelEndpoint((llm.model_endpoint as string) || '');
   }, []);
 
-  const saveConfig = async () => {
-    if (!agent?.raw) return;
-    setSavingConfig(true);
+  // Build a diff + update payload by comparing the current form state against
+  // the server's last-known agent config. Returns null when nothing changed.
+  const buildConfigDiff = (): { updates: Record<string, unknown>; diff: StagedDiff } | null => {
+    if (!agent?.raw) return null;
+    const r = agent.raw;
+    const llm = (r.llm_config as Record<string, unknown>) || {};
+    const updates: Record<string, unknown> = {};
+    const diff: StagedDiff = [];
+    const push = (label: string, from: unknown, to: unknown) => diff.push({ label, from, to });
+
+    const rName = (r.name as string) || '';
+    if (cfgName !== rName) { updates.name = cfgName; push('Name', rName || '—', cfgName || '—'); }
+
+    const rDesc = (r.description as string) || '';
+    if (cfgDesc !== rDesc) { updates.description = cfgDesc || null; push('Description', rDesc || '—', cfgDesc || '—'); }
+
+    const rModel = (r.model as string) || (llm.handle as string) || (llm.model as string) || '';
+    if (cfgModel !== rModel) { updates.model = cfgModel || null; push('Model', rModel || '—', cfgModel || '—'); }
+
+    const rEmbedding = (r.embedding as string) || '';
+    if (cfgEmbedding !== rEmbedding) { updates.embedding = cfgEmbedding || null; push('Embedding', rEmbedding || '—', cfgEmbedding || '—'); }
+
+    const rSleeptime = (r.enable_sleeptime as boolean) || false;
+    if (cfgSleeptime !== rSleeptime) { updates.enable_sleeptime = cfgSleeptime; push('Sleeptime', rSleeptime, cfgSleeptime); }
+
+    const rAutoclear = (r.message_buffer_autoclear as boolean) || false;
+    if (cfgAutoclear !== rAutoclear) { updates.message_buffer_autoclear = cfgAutoclear; push('Autoclear Buffer', rAutoclear, cfgAutoclear); }
+
+    const newTags = cfgTags.split(',').map(t => t.trim()).filter(Boolean);
+    const oldTagsArr = (r.tags as string[]) || [];
+    const oldTagsStr = oldTagsArr.join(', ');
+    if (cfgTags !== oldTagsStr) { updates.tags = newTags; push('Tags', oldTagsStr || '—', newTags.join(', ') || '—'); }
+
+    const cwl = cfgContextWindow ? parseInt(cfgContextWindow) : null;
+    const rCwl = (r.context_window_limit as number) || null;
+    if (cwl !== rCwl) { updates.context_window_limit = cwl; push('Context Window', rCwl ?? '—', cwl ?? '—'); }
+
+    const llmUpdates: Record<string, unknown> = {};
+
+    const mt = cfgMaxTokens ? parseInt(cfgMaxTokens) : null;
+    const rMt = (llm.max_tokens as number) || null;
+    if (mt !== rMt) { llmUpdates.max_tokens = mt; push('Max Tokens', rMt ?? '—', mt ?? '—'); }
+
+    const rReasoner = (llm.enable_reasoner as boolean) || false;
+    if (cfgEnableReasoner !== rReasoner) { llmUpdates.enable_reasoner = cfgEnableReasoner; push('Reasoner', rReasoner, cfgEnableReasoner); }
+
+    const mrt = cfgMaxReasoningTokens ? parseInt(cfgMaxReasoningTokens) : undefined;
+    const rMrt = (llm.max_reasoning_tokens as number) || undefined;
+    if (mrt !== rMrt) { llmUpdates.max_reasoning_tokens = mrt; push('Max Reasoning Tokens', rMrt ?? '—', mrt ?? '—'); }
+
+    const rEffort = (llm.effort as string) || '';
+    if (cfgEffort !== rEffort) { llmUpdates.effort = cfgEffort || null; push('Effort', rEffort || '—', cfgEffort || '—'); }
+
+    const fp = cfgFreqPenalty ? parseFloat(cfgFreqPenalty) : null;
+    const rFp = (llm.frequency_penalty as number) || null;
+    if (fp !== rFp) { llmUpdates.frequency_penalty = fp; push('Freq. Penalty', rFp ?? '—', fp ?? '—'); }
+
+    const rParallel = (llm.parallel_tool_calls as boolean) || false;
+    if (cfgParallelToolCalls !== rParallel) { llmUpdates.parallel_tool_calls = cfgParallelToolCalls; push('Parallel Tools', rParallel, cfgParallelToolCalls); }
+
+    const rEndpoint = (llm.model_endpoint as string) || '';
+    if (cfgModelEndpoint !== rEndpoint) { llmUpdates.model_endpoint = cfgModelEndpoint || null; push('Endpoint', rEndpoint || '—', cfgModelEndpoint || '—'); }
+
+    if (Object.keys(llmUpdates).length > 0) {
+      updates.llm_config = { ...llm, ...llmUpdates };
+    }
+
+    if (diff.length === 0) return null;
+    return { updates, diff };
+  };
+
+  // Stage the save: compute the diff, show the preview modal. User then
+  // confirms or cancels in the modal.
+  const saveConfig = () => {
     setSaveMessage(null);
+    const staged = buildConfigDiff();
+    if (!staged) {
+      setSaveMessage('No changes');
+      setTimeout(() => setSaveMessage(null), 2000);
+      return;
+    }
+    setPendingChanges(staged);
+  };
+
+  // Apply the staged save. Called from the diff-preview modal.
+  const applyPendingChanges = async () => {
+    if (!pendingChanges) return;
+    setSavingConfig(true);
     try {
-      const r = agent.raw;
-      const llm = (r.llm_config as Record<string, unknown>) || {};
-
-      const updates: Record<string, unknown> = {};
-
-      if (cfgName !== ((r.name as string) || '')) updates.name = cfgName;
-      if (cfgDesc !== ((r.description as string) || '')) updates.description = cfgDesc || null;
-      if (cfgModel !== ((r.model as string) || (llm.handle as string) || (llm.model as string) || '')) {
-        updates.model = cfgModel || null;
-      }
-      if (cfgEmbedding !== ((r.embedding as string) || '')) updates.embedding = cfgEmbedding || null;
-      if (cfgSleeptime !== ((r.enable_sleeptime as boolean) || false)) updates.enable_sleeptime = cfgSleeptime;
-      if (cfgAutoclear !== ((r.message_buffer_autoclear as boolean) || false)) {
-        updates.message_buffer_autoclear = cfgAutoclear;
-      }
-
-      const newTags = cfgTags.split(',').map(t => t.trim()).filter(Boolean);
-      const oldTags = ((r.tags as string[]) || []).join(', ');
-      if (cfgTags !== oldTags) updates.tags = newTags;
-
-      const cwl = cfgContextWindow ? parseInt(cfgContextWindow) : null;
-      if (cwl !== ((r.context_window_limit as number) || null)) updates.context_window_limit = cwl;
-
-      const llmUpdates: Record<string, unknown> = {};
-      const mt = cfgMaxTokens ? parseInt(cfgMaxTokens) : null;
-      if (mt !== ((llm.max_tokens as number) || null)) llmUpdates.max_tokens = mt;
-      if (cfgEnableReasoner !== ((llm.enable_reasoner as boolean) || false)) llmUpdates.enable_reasoner = cfgEnableReasoner;
-      const mrt = cfgMaxReasoningTokens ? parseInt(cfgMaxReasoningTokens) : undefined;
-      if (mrt !== ((llm.max_reasoning_tokens as number) || undefined)) llmUpdates.max_reasoning_tokens = mrt;
-      if (cfgEffort !== ((llm.effort as string) || '')) llmUpdates.effort = cfgEffort || null;
-      const fp = cfgFreqPenalty ? parseFloat(cfgFreqPenalty) : null;
-      if (fp !== ((llm.frequency_penalty as number) || null)) llmUpdates.frequency_penalty = fp;
-      if (cfgParallelToolCalls !== ((llm.parallel_tool_calls as boolean) || false)) {
-        llmUpdates.parallel_tool_calls = cfgParallelToolCalls;
-      }
-      if (cfgModelEndpoint !== ((llm.model_endpoint as string) || '')) llmUpdates.model_endpoint = cfgModelEndpoint || null;
-
-      if (Object.keys(llmUpdates).length > 0) {
-        updates.llm_config = { ...llm, ...llmUpdates };
-      }
-
-      if (Object.keys(updates).length === 0) {
-        setSaveMessage('No changes');
-        setSavingConfig(false);
-        setTimeout(() => setSaveMessage(null), 2000);
-        return;
-      }
-
-      await updateAgent(agentId, updates);
+      await updateAgent(agentId, pendingChanges.updates);
       setSaveMessage('Saved');
       loadAgent(agentId);
       setTimeout(() => setSaveMessage(null), 2000);
+      setPendingChanges(null);
     } catch (err) {
       setSaveMessage(`Error: ${err instanceof Error ? err.message : 'Failed to save'}`);
     } finally {
@@ -424,9 +561,18 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
   const loadAgentTools = async () => {
     setLoadingTools(true);
     try {
+      const client = getLettaClient();
       const [attached, all] = await Promise.all([
-        agentsApi.getTools(agentId),
-        agentsApi.listAllTools(),
+        (async () => {
+          const out: Letta.Tool[] = [];
+          for await (const t of client.agents.tools.list(agentId)) out.push(t);
+          return out;
+        })(),
+        (async () => {
+          const out: Letta.Tool[] = [];
+          for await (const t of client.tools.list()) out.push(t);
+          return out;
+        })(),
       ]);
       setAgentTools(attached.map(t => ({
         id: t.id,
@@ -452,7 +598,7 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
   const attachTool = async (toolId: string) => {
     setToolActionPending(toolId);
     try {
-      await agentsApi.attachTool(agentId, toolId);
+      await getLettaClient().agents.tools.attach(toolId, { agent_id: agentId });
       await loadAgentTools();
     } catch (err) {
       console.error('Failed to attach tool:', err);
@@ -464,7 +610,7 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
   const detachTool = async (toolId: string) => {
     setToolActionPending(toolId);
     try {
-      await agentsApi.detachTool(agentId, toolId);
+      await getLettaClient().agents.tools.detach(toolId, { agent_id: agentId });
       setAgentTools(prev => prev.filter(t => t.id !== toolId));
     } catch (err) {
       console.error('Failed to detach tool:', err);
@@ -560,6 +706,11 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
       return;
     }
 
+    // Optimistic render: show the user's message immediately. Without this
+    // the message stays invisible until after the stream completes and the
+    // history refetch lands, then user + assistant snap in together.
+    setPendingUserMessage(userMsg);
+
     // Start streaming
     setShowPartialMessage(true);
     partialMessageRef.current = '';
@@ -576,7 +727,7 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
             partialMessageRef.current = assistantContent;
             setPartialMessage(assistantContent);
             if (shouldAutoScroll) {
-              messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+              messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
             }
             break;
           case 'reasoning':
@@ -609,6 +760,9 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
       setShowPartialMessage(false);
       partialMessageRef.current = '';
       setPartialMessage('');
+      // Refetch (above) populated the real user message — drop the optimistic
+      // copy so we don't render it twice.
+      setPendingUserMessage(null);
     }
   }, [inputValue, activeConversationId, isStreaming, handleSlashCommand, resetToLatest, shouldAutoScroll, agentId, createConversation, setActiveConversationId]);
 
@@ -658,21 +812,46 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
               {agent.name.slice(0, 2).toUpperCase()}
             </div>
             <div>
-              <h1 className="text-sm font-semibold text-ink-900">{agent.name}</h1>
-              <span className="text-xs text-ink-500">{getModelDisplay(agent.model)}</span>
+              <div className="flex items-center gap-1.5">
+                <h1 className="text-sm font-semibold text-ink-900">{agent.name}</h1>
+                {isMemfsEnabledAgent(agent.raw as { memory?: { git_enabled?: boolean } | null; tags?: string[] | null } | undefined) && (
+                  <span
+                    className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-medium uppercase tracking-wide"
+                    title="git-memory-enabled — agent uses memfs (git-backed memory)"
+                  >
+                    memfs
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-ink-500">{getModelDisplay(agent.model)}</span>
+                <span className="text-[10px] text-ink-400 font-mono" title="Agent ID">ID: {agent.id.slice(0, 8)}</span>
+              </div>
             </div>
           </div>
-
-          <span className="px-2 py-0.5 text-xs font-medium bg-accent/10 text-accent rounded">
-            {getModelDisplay(agent.model)}
-          </span>
         </div>
 
         <div className="flex items-center gap-3">
-          <ConnectionModeIndicator
-            mode={connectionMode}
-            onModeChange={setConnectionMode}
-          />
+          {!focusMode && (
+            <ConnectionModeIndicator
+              mode={connectionMode}
+              onModeChange={setConnectionMode}
+            />
+          )}
+
+          {/* Stale-conversation count badge */}
+          {!focusMode && agent.conversations && agent.conversations.length > 0 && (() => {
+            const staleCount = agent.conversations.filter(isConversationStale).length;
+            if (staleCount === 0) return null;
+            return (
+              <span
+                className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[11px] font-medium"
+                title={`${staleCount} conversation${staleCount === 1 ? '' : 's'} idle ≥${STALE_CONVERSATION_DAYS} days. Open one and click "Wrap up" to summarize and archive.`}
+              >
+                {staleCount} stale
+              </span>
+            );
+          })()}
 
           {/* Conversation Selector */}
           {agent.conversations && agent.conversations.length > 0 && (
@@ -680,29 +859,46 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
               <select
                 value={activeConversationId || ""}
                 onChange={(e) => setActiveConversationId(e.target.value || null)}
-                className="px-3 py-1.5 text-sm bg-surface-cream border border-ink-900/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-accent/50"
+                className="px-3 py-1.5 text-sm bg-surface-cream border border-ink-900/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-accent/50 max-w-[18rem]"
+                title="Conversation selector — labels prefer the upstream summary, fall back to short id"
               >
                 {agent.conversations.map((conv) => (
                   <option key={conv.id} value={conv.id}>
-                    {`Conversation ${conv.id.slice(0, 8)}`}
+                    {formatConversationOption(conv)}
                   </option>
                 ))}
               </select>
-              {activeConversationId && (
-                <button
-                  onClick={() => setConvDeleteId(activeConversationId)}
-                  title="Delete this conversation"
-                  aria-label="Delete this conversation"
-                  className="p-1.5 rounded-lg text-ink-500 hover:text-red-600 hover:bg-red-50 transition-colors"
-                >
-                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="3 6 5 6 21 6" />
-                    <path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6" />
-                    <path d="M10 11v6" />
-                    <path d="M14 11v6" />
-                  </svg>
-                </button>
-              )}
+              {activeConversationId && (() => {
+                const activeConv = agent.conversations.find((c) => c.id === activeConversationId);
+                const stale = activeConv ? isConversationStale(activeConv) : false;
+                return (
+                  <>
+                    {stale && (
+                      <button
+                        onClick={() => setInputValue('/wrapup')}
+                        title="Conversation is idle ≥2 weeks. Inserts /wrapup so the agent can summarize, extract facts to memory, and archive."
+                        aria-label="Wrap up this stale conversation"
+                        className="px-2 py-1 rounded-lg text-amber-700 bg-amber-100 hover:bg-amber-200 text-xs font-medium transition-colors"
+                      >
+                        Wrap up
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setConvDeleteId(activeConversationId)}
+                      title="Delete this conversation"
+                      aria-label="Delete this conversation"
+                      className="p-1.5 rounded-lg text-ink-500 hover:text-red-600 hover:bg-red-50 transition-colors"
+                    >
+                      <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="3 6 5 6 21 6" />
+                        <path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6" />
+                        <path d="M10 11v6" />
+                        <path d="M14 11v6" />
+                      </svg>
+                    </button>
+                  </>
+                );
+              })()}
             </div>
           )}
 
@@ -714,35 +910,75 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
           </button>
 
           {/* Slash Commands Dropdown */}
-          <div className="relative">
-            <button
-              onClick={() => setShowCommands(!showCommands)}
-              className="px-3 py-1.5 text-sm font-medium text-ink-600 hover:text-ink-900 hover:bg-ink-900/5 rounded-lg transition-colors"
-            >
-              / Commands
-            </button>
-            {showCommands && (
-              <div className="absolute right-0 top-full mt-1 w-56 bg-surface border border-ink-900/10 rounded-lg shadow-lg z-50 py-1">
-                {SLASH_COMMANDS.map((cmd) => (
-                  <button
-                    key={cmd.id}
-                    onClick={() => { handleSlashCommand(cmd.id, ''); setShowCommands(false); }}
-                    className="w-full px-4 py-2 text-left text-sm flex items-center justify-between hover:bg-ink-900/5"
-                    title={cmd.desc}
-                  >
-                    <span className="font-medium text-ink-900">/{cmd.id}</span>
-                    <span className="text-xs text-ink-500">{cmd.desc}</span>
-                  </button>
-                ))}
-              </div>
+          {!focusMode && (
+            <div className="relative">
+              <button
+                onClick={() => setShowCommands(!showCommands)}
+                className="px-3 py-1.5 text-sm font-medium text-ink-600 hover:text-ink-900 hover:bg-ink-900/5 rounded-lg transition-colors"
+              >
+                / Commands
+              </button>
+              {showCommands && (
+                <div className="absolute right-0 top-full mt-1 w-56 bg-surface border border-ink-900/10 rounded-lg shadow-lg z-50 py-1">
+                  {SLASH_COMMANDS.map((cmd) => (
+                    <button
+                      key={cmd.id}
+                      onClick={() => { handleSlashCommand(cmd.id, ''); setShowCommands(false); }}
+                      className="w-full px-4 py-2 text-left text-sm flex items-center justify-between hover:bg-ink-900/5"
+                      title={cmd.desc}
+                    >
+                      <span className="font-medium text-ink-900">/{cmd.id}</span>
+                      <span className="text-xs text-ink-500">{cmd.desc}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Focus mode toggle — last item in header so it's predictable.
+              Compresses workspace to chat-only; the Home dashboard's Chat
+              button can pre-arm this via localStorage. */}
+          <button
+            onClick={() => setFocusMode((f) => !f)}
+            className={`p-1.5 rounded-lg transition-colors ${
+              focusMode
+                ? 'bg-accent/15 text-accent hover:bg-accent/25'
+                : 'text-ink-500 hover:text-ink-900 hover:bg-ink-900/5'
+            }`}
+            title={focusMode ? 'Exit focus mode (show settings + memory panels)' : 'Focus mode — chat only, hide side panels'}
+            aria-label={focusMode ? 'Exit focus mode' : 'Enter focus mode'}
+            aria-pressed={focusMode}
+          >
+            {focusMode ? (
+              // outward arrows = "expand back to full"
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M4 8V4m0 0h4M4 4l5 5m11-5h-4m4 0v4m0-4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+              </svg>
+            ) : (
+              // inward arrows = "compress to chat only"
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M9 9V5m0 0H5m4 0L4 4m11 5h4m0 0V5m0 4l5-5M9 15v4m0 0H5m4 0l-5 5m11-5h4m0 0v4m0-4l5 5" />
+              </svg>
             )}
-          </div>
+          </button>
         </div>
       </header>
 
-      {/* 3-Pane Layout */}
-      <PanelGroup orientation="horizontal" className="flex-1 min-h-0">
+      {/* 3-Pane Layout — collapses to chat-only in focus mode. The PanelGroup
+          re-balances when its children change, so wrapping the side panels +
+          their separators in `{!focusMode && ...}` is enough. We use a
+          `key` tied to focus state so the group resets cleanly between
+          modes (without it, leftover panel sizes can bleed across). */}
+      <PanelGroup
+        key={focusMode ? 'focus' : 'full'}
+        orientation="horizontal"
+        className="flex-1 min-h-0"
+      >
         {/* Left: Settings Panel */}
+        {!focusMode && (
         <Panel defaultSize={25} minSize={15} maxSize={40}>
           <div className="h-full flex flex-col bg-surface border-r border-ink-900/10">
             {/* Settings Tabs */}
@@ -952,22 +1188,30 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
               )}
             </div>
 
-            {/* Delete Agent */}
-            <div className="p-4 border-t border-ink-900/10">
+            {/* Delete Agent — demoted to icon-only danger menu */}
+            <div className="p-3 border-t border-ink-900/10">
               <button
                 onClick={() => setShowDeleteConfirm(true)}
-                className="w-full px-3 py-2 text-xs font-medium rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors"
+                className="flex items-center gap-2 text-xs text-ink-400 hover:text-red-600 transition-colors"
+                title="Delete this agent permanently"
               >
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <polyline points="3 6 5 6 21 6" />
+                  <path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6" />
+                  <path d="M10 11v6" />
+                  <path d="M14 11v6" />
+                </svg>
                 Delete Agent
               </button>
             </div>
           </div>
         </Panel>
+        )}
 
-        <Separator className="w-1 bg-ink-900/10 hover:bg-accent/50 transition-colors" />
+        {!focusMode && <Separator className="w-1 bg-ink-900/10 hover:bg-accent/50 transition-colors" />}
 
-        {/* Center: Chat Panel */}
-        <Panel defaultSize={50} minSize={30} maxSize={70}>
+        {/* Center: Chat Panel — fills the group when focusMode is on. */}
+        <Panel defaultSize={focusMode ? 100 : 50} minSize={focusMode ? 100 : 30} maxSize={100}>
           <div className="h-full flex flex-col bg-surface-cream relative overflow-hidden">
             <div
               ref={scrollContainerRef}
@@ -1028,6 +1272,18 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
                       assistantName={nickname || agent.name || 'Assistant'}
                     />
                   ))
+                )}
+
+                {pendingUserMessage && (
+                  <MessageCard
+                    key={`${activeConversationId}-pending-user`}
+                    message={{ type: 'user_prompt', prompt: pendingUserMessage }}
+                    isLast={false}
+                    isRunning={false}
+                    permissionRequest={undefined}
+                    onPermissionResult={() => {}}
+                    assistantName={nickname || agent.name || 'Assistant'}
+                  />
                 )}
 
                 {partialMessage && (
@@ -1126,12 +1382,14 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
           </div>
         </Panel>
 
-        <Separator className="w-1 bg-ink-900/10 hover:bg-accent/50 transition-colors" />
+        {!focusMode && <Separator className="w-1 bg-ink-900/10 hover:bg-accent/50 transition-colors" />}
 
         {/* Right: Memory Panel */}
-        <Panel defaultSize={25} minSize={15} maxSize={40}>
-          <AgentMemoryPanel agentId={agentId} />
-        </Panel>
+        {!focusMode && (
+          <Panel defaultSize={25} minSize={15} maxSize={40}>
+            <AgentMemoryPanel agentId={agentId} />
+          </Panel>
+        )}
       </PanelGroup>
 
       <ConfirmDialog
@@ -1160,6 +1418,55 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
         onConfirm={handleDeleteConversation}
         onCancel={() => !convDeleting && setConvDeleteId(null)}
       />
+
+      {/* Save-diff preview */}
+      {pendingChanges && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-surface shadow-xl border border-ink-900/10 flex flex-col max-h-[80vh]">
+            <div className="px-5 py-4 border-b border-ink-900/10">
+              <h2 className="text-base font-semibold text-ink-900">Review changes</h2>
+              <p className="text-xs text-ink-600 mt-1">
+                {pendingChanges.diff.length} field{pendingChanges.diff.length !== 1 ? 's' : ''} will change on <span className="font-medium">{agent.name}</span>.
+              </p>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-3">
+              <div className="divide-y divide-ink-900/5">
+                {pendingChanges.diff.map((entry, i) => (
+                  <div key={i} className="py-2.5 grid grid-cols-[120px_1fr] gap-3 items-start">
+                    <div className="text-xs font-medium text-ink-700 pt-0.5">{entry.label}</div>
+                    <div className="flex flex-col gap-1 text-xs font-mono">
+                      <div className="flex items-start gap-2">
+                        <span className="shrink-0 text-red-500">−</span>
+                        <span className="text-ink-600 line-through break-all">{String(entry.from)}</span>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <span className="shrink-0 text-green-600">+</span>
+                        <span className="text-ink-900 break-all">{String(entry.to)}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="px-5 py-3 border-t border-ink-900/10 flex items-center justify-end gap-2">
+              <button
+                onClick={() => !savingConfig && setPendingChanges(null)}
+                disabled={savingConfig}
+                className="px-3 py-2 text-xs font-medium rounded-lg bg-surface-tertiary text-ink-700 hover:bg-ink-900/10 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={applyPendingChanges}
+                disabled={savingConfig}
+                className="px-3 py-2 text-xs font-medium rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-50"
+              >
+                {savingConfig ? 'Saving…' : `Apply ${pendingChanges.diff.length} change${pendingChanges.diff.length !== 1 ? 's' : ''}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

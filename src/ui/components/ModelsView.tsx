@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { agentsApi } from "../services/api";
+import { listLLMModels } from "../services/api";
 
 interface ModelRow {
   id: string;
@@ -18,7 +18,7 @@ export function ModelsView() {
     setLoading(true);
     setError(null);
     try {
-      const results = await agentsApi.listAllModels();
+      const results = await listLLMModels();
       setModels(results);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load models");

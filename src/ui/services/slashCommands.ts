@@ -2,7 +2,15 @@
  * Slash command implementations using native Letta client API
  */
 
-import { agentsApi, conversationsApi } from './api';
+import type { Letta } from '@letta-ai/letta-client';
+import { getLettaClient } from './api';
+
+async function listAgentBlocks(agentId: string): Promise<Letta.BlockResponse[]> {
+  const client = getLettaClient();
+  const blocks: Letta.BlockResponse[] = [];
+  for await (const b of client.agents.blocks.list(agentId)) blocks.push(b);
+  return blocks;
+}
 
 export interface SlashCommandResult {
   success: boolean;
@@ -22,7 +30,7 @@ export type SlashCommandExecutor = (
  */
 const doctorCommand: SlashCommandExecutor = async (agentId) => {
   try {
-    const blocks = await agentsApi.getMemoryBlocks(agentId);
+    const blocks = await listAgentBlocks(agentId);
 
     if (blocks.length === 0) {
       return {
@@ -56,7 +64,7 @@ const doctorCommand: SlashCommandExecutor = async (agentId) => {
  */
 const clearCommand: SlashCommandExecutor = async (agentId) => {
   try {
-    const newConversation = await conversationsApi.createConversation(agentId);
+    const newConversation = await getLettaClient().conversations.create({ agent_id: agentId });
 
     return {
       success: true,
@@ -84,7 +92,7 @@ const rememberCommand: SlashCommandExecutor = async (agentId, _conversationId, a
   }
 
   try {
-    const result = await agentsApi.createPassage(agentId, args.trim());
+    const result = await getLettaClient().agents.passages.create(agentId, { text: args.trim() });
     // SDK may return a single passage or a list; extract id defensively.
     const first = Array.isArray(result) ? result[0] : result;
     const id = (first as { id?: string } | undefined)?.id ?? '';
@@ -109,11 +117,12 @@ const rememberCommand: SlashCommandExecutor = async (agentId, _conversationId, a
  */
 const recompileCommand: SlashCommandExecutor = async (agentId) => {
   try {
-    const blocks = await agentsApi.getMemoryBlocks(agentId);
+    const blocks = await listAgentBlocks(agentId);
     if (blocks.length === 0) {
       return { success: false, message: 'No memory blocks to recompile.' };
     }
 
+    const client = getLettaClient();
     let rewritten = 0;
     for (const block of blocks) {
       if (!block.label) continue;
@@ -126,7 +135,7 @@ const recompileCommand: SlashCommandExecutor = async (agentId) => {
       } else if (typeof existing.value === 'string') {
         text = existing.value;
       }
-      await agentsApi.updateMemoryBlock(agentId, block.label, text);
+      await client.agents.blocks.update(block.label, { agent_id: agentId, value: text });
       rewritten++;
     }
 

@@ -92,16 +92,43 @@ Streaming yields these message types:
 
 ## Memory Block Format (SDK 0.1.14+)
 
+Server responses can carry either shape. The store-level `MemoryBlock` keeps both
+fields populated for backwards compat:
+
 ```typescript
 interface MemoryBlock {
   id: string;
   label: string;
-  value: string;  // Raw string value
-  limit?: number;
+  value?: string;                     // legacy field (still set by store)
+  content?: string | { text?: string }; // SDK 0.1.14 field
+  limit?: number;                     // character limit, not tokens
 }
 ```
 
-Use `value` field (not `content`).
+When reading a block's text, prefer `content` then fall back to `value`. The
+`extractBlockText` / `extractBlockValue` helpers in `useAppStore.ts` and
+`utils/memoryHealth.ts` encapsulate this — use them instead of inlining the
+ladder.
+
+**`limit` is in characters**, not tokens. The pressure ratio in
+`calculateMemoryHealth` uses chars for that reason. Token counts (via
+`utils/tokens.ts` → `js-tiktoken` `cl100k_base`) are display-only — close enough
+to Claude's tokenizer for a UI gauge, **not** for billing.
+
+## Memfs detection (3-signal hierarchy)
+
+`isMemfsEnabledAgent(input)` in `useAppStore.ts` checks signals in this order;
+first match wins:
+
+1. `agent.memory.git_enabled === true` — authoritative; flipped server-side by
+   `/memfs enable` or a `PATCH /v1/agents/{id}` with `{"memory":{"git_enabled":true}}`.
+2. `agent.tags` contains `git-memory-enabled` — legacy fallback; not reliable
+   across Letta server versions.
+3. Any block in `memoryBlocks` has a slash in its `label` (e.g. `system/skills/git.md`)
+   — structural fallback because some SDK retrieve responses omit signal #1.
+
+Pass `{ memory, tags, memoryBlocks }` together so all three are checked. The
+old `(tags)` array shape is kept for back-compat (tag-only check).
 
 ## Development Server
 
@@ -120,10 +147,76 @@ npm run transpile:electron  # Compile Electron code
 
 ## API Service Location
 
-`/home/casey/Projects/letta-oss-ui/src/ui/services/api.ts`
-- Uses `@letta-ai/letta-client` for native API
-- Both `agentsApi` and `chatApi` exported
-- Also legacy combined `api` export for compatibility
+`src/ui/services/api.ts` is intentionally thin after the 2026-04-25 migration:
+
+- **`getLettaClient()`** — singleton SDK client, the primary export. Use this
+  directly; do not write wrapper objects on top of it.
+- **`getApiBase()` / `getApiKey()` / `resetClient()`** — client lifecycle helpers
+  for the settings panel.
+- **Type re-exports** — `AgentState`, `BlockResponse`, `Tool`, `Passage`,
+  message types, `Conversation`.
+- **`listLLMModels()` / `listEmbeddingModels()`** — free helpers that wrap
+  `client.models.list()` / `client.models.embeddings.list()` and normalize the
+  raw shape into `{id, name, provider, contextWindow}`. Three call sites need
+  this same normalization (settings panel, model wizard step, `ModelsView`),
+  so it's worth a helper. **Not** a wrapper — just shared shape mapping.
+- **`systemApi`** — custom probes that aren't in the SDK (external-memfs
+  detection via `/openapi.json`, `checkServerHealth`).
+- **`deployApi`** — mock-only deploy stubs.
+
+The legacy `agentsApi`, `conversationsApi`, and combined `api` exports are
+**gone**. If you find yourself wanting to add one, instead:
+- Inline the SDK call at the consumer (1–2 sites)
+- OR add a small free function in `api.ts` (3+ consumers needing identical
+  shape normalization)
+- Async iterators (`for await`) get inlined at the call site too — don't add
+  helper objects just to convert iterator → array.
+
+## Engineering patterns established
+
+Patterns that recur in this codebase. Follow these before inventing new ones.
+
+**Direct SDK, no wrappers.** See "API Service Location" above. The migration
+plan in `docs/plans/MIGRATE_TO_DIRECT_SDK.md` records the rationale and
+file-by-file work.
+
+**`agent.raw` carries the full server object.** `useAppStore.loadAgent` stashes
+the SDK's `AgentState` response under `agent.raw`. Downstream consumers
+(`AgentWorkspace`, `AgentMemoryPanel`) cast it with a narrow shape and read
+fields directly — there's no flattened mirror, just `raw.llm_config`,
+`raw.memory.git_enabled`, `raw.tags`, etc. Don't introduce parallel typed fields.
+
+**localStorage as a cross-component coordination seam.** When a control on
+surface A needs to influence behavior on surface B without prop-drilling, write
+a per-agent localStorage key from A and read it in B's `useState` initializer
++ a `useEffect` keyed on agent id (so re-navigation re-syncs). Examples:
+- `letta:focus-mode:{agentId}` — Home dashboard's Chat button writes `'true'`,
+  `AgentWorkspace` reads it.
+- `letta-community-ade:favorite-agent` — `useAppStore` reads it on init,
+  writes via `setFavoriteAgentId`.
+- `letta_default_llm` / `letta_default_embedding` — settings panel writes,
+  agent wizard reads.
+
+**Conditional `<PanelGroup>` children + a `key` swap.** When toggling between
+layouts using `react-resizable-panels` (e.g. Focus Mode collapsing 3 panes
+to 1), conditionally render the side panels and **swap the `PanelGroup`'s
+`key`** between modes. Without the key, leftover panel sizes bleed across.
+
+**Navigation contract: same destination, different intent.** When one helper
+opens the same surface for several semantically distinct user actions, take a
+mode arg. Example: `openFavoriteAgent(id, mode: 'focus' | 'full')` — Chat sends
+`'focus'`, Memory/Settings send `'full'`. Don't create three separate handlers
+that diverge only in side effects; one handler with intent is clearer.
+
+**Limit semantics: server unit for math, display unit for UI.** Memory block
+`limit` is in characters server-side, so the pressure ratio uses chars. Token
+counts (cl100k_base via tiktoken) are *display only* and are computed once in
+`calculateMemoryHealth` so the gauge can show real numbers without re-encoding
+elsewhere.
+
+**Defensive fallbacks belong in the detection function, not call sites.** The
+3-signal memfs hierarchy (see above) lives entirely in `isMemfsEnabledAgent`.
+Call sites just pass `{memory, tags, memoryBlocks}` and trust the result.
 
 ---
 

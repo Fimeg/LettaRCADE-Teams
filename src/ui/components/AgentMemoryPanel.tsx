@@ -1,11 +1,13 @@
-import { useState, useCallback, useEffect } from "react";
-import { useAppStore, type MemoryBlock } from "../store/useAppStore";
+import { useState, useCallback, useEffect, useMemo } from "react";
+import { useAppStore, isMemfsEnabledAgent, type MemoryBlock } from "../store/useAppStore";
 import { useSacredBlocks } from "../hooks/useSacredBlocks";
 import { calculateMemoryHealth, classifyTier, tierColors } from "../utils/memoryHealth";
 import { MemoryPressureGauge } from "./MemoryPressureGauge";
 import { BlockPressureIndicator } from "./BlockPressureIndicator";
 import { SacredToggle } from "./SacredToggle";
-import { agentsApi } from "../services/api";
+import { MemfsFileTree } from "./MemfsFileTree";
+import { getLettaClient, getApiBase } from "../services/api";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 interface AgentMemoryPanelProps {
   agentId: string;
@@ -13,7 +15,8 @@ interface AgentMemoryPanelProps {
   apiUrl?: string;
 }
 
-type MemoryTab = "core" | "archival" | "sources";
+type MemoryTab = "core" | "archival";
+type CoreViewMode = "blocks" | "files";  // For memfs-compatible agents
 
 interface EditingState {
   blockId: string | null;
@@ -47,14 +50,60 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
   const [isInserting, setIsInserting] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
 
-  // Curator / Memory Health state
-  const { toggleSacred, isSacred, loaded: sacredLoaded } = useSacredBlocks(agentId);
-
   // Store integration
   const agent = useAppStore((s) => s.agents[agentId]);
   const updateMemoryBlock = useAppStore((s) => s.updateMemoryBlock);
+  const loadAgent = useAppStore((s) => s.loadAgent);
+
+  // Curator / Memory Health state
+  const { toggleSacred, isSacred, loaded: sacredLoaded } = useSacredBlocks(agentId);
+
+  // Memfs / File tree view state
+  const [coreViewMode, setCoreViewMode] = useState<CoreViewMode>("blocks");
+
+  // /memfs enable confirmation modal — match the confirmation pattern used
+  // by the per-agent settings panel on the left of the workspace. Memfs
+  // activation is an irreversible-ish, agent-altering change; never one-click.
+  const [showMemfsEnableConfirm, setShowMemfsEnableConfirm] = useState(false);
+  const [memfsEnableNotice, setMemfsEnableNotice] = useState<string | null>(null);
+
+  // Memory block edit confirmation — prevents accidental clobbering
+  const [pendingSave, setPendingSave] = useState<{ blockLabel: string; original: string; draft: string } | null>(null);
+
+  // Memfs activation: see isMemfsEnabledAgent in useAppStore for the full
+  // signal hierarchy. We also pass the loaded memoryBlocks so a path-style
+  // label (e.g. "system/skills/git.md") triggers memfs UI even when the
+  // SDK's retrieve response doesn't include the canonical `memory.git_enabled`.
+  const supportsMemfs = useMemo(
+    () => isMemfsEnabledAgent({
+      memory: (agent?.raw as { memory?: { git_enabled?: boolean } | null } | undefined)?.memory,
+      tags: (agent?.raw as { tags?: string[] | null } | undefined)?.tags,
+      memoryBlocks: agent?.memoryBlocks,
+    }),
+    [agent],
+  );
+
+  const residency = useMemo(() => {
+    const base = getApiBase();
+    let host = base;
+    try { host = new URL(base).host; } catch { /* keep raw */ }
+    const id = agent?.id ?? agentId;
+    const shortId = id.length > 16 ? `${id.slice(0, 14)}…${id.slice(-4)}` : id;
+    return { host, shortId };
+  }, [agent, agentId]);
 
   const memoryBlocks = agent?.memoryBlocks ?? [];
+
+  // Create a memory block on the server and attach it to this agent. Used for
+  // memfs "new file" / "new folder" / "new block" actions — the SDK doesn't
+  // expose a one-shot endpoint, so we create then attach.
+  const createAndAttachBlock = async (label: string, value: string) => {
+    const client = getLettaClient();
+    const block = await client.blocks.create({ label, value });
+    if (!block.id) throw new Error('Block creation returned no id');
+    await client.agents.blocks.attach(block.id, { agent_id: agentId });
+    return block;
+  };
 
   // ═══ Archival Memory API Functions ═══
   const [passageError, setPassageError] = useState<string | null>(null);
@@ -65,7 +114,9 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
     setPassageError(null);
     setIsSearching(true);
     try {
-      const results = await agentsApi.getPassages(agentId, searchQuery.trim() || undefined, 20);
+      const search = searchQuery.trim() || undefined;
+      const options = search ? { search, limit: 20 } : { limit: 20 };
+      const results = await getLettaClient().agents.passages.list(agentId, options);
       // SDK 0.1.14 Passage shape may differ from local Passage type; normalize.
       const normalized: Passage[] = (results as unknown as Array<{
         id: string;
@@ -94,7 +145,7 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
     setIsInserting(true);
     setPassageError(null);
     try {
-      await agentsApi.createPassage(agentId, newPassageText.trim());
+      await getLettaClient().agents.passages.create(agentId, { text: newPassageText.trim() });
       setNewPassageText("");
       await searchArchival();
     } catch (err) {
@@ -108,7 +159,7 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
     setIsDeleting(true);
     setPassageError(null);
     try {
-      await agentsApi.deletePassage(agentId, passageId);
+      await getLettaClient().agents.passages.delete(passageId, { agent_id: agentId });
       setPassageToDelete(null);
       await searchArchival();
     } catch (err) {
@@ -161,7 +212,7 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
     });
   }, []);
 
-  // Save the edited block
+  // Save the edited block — shows confirmation first to prevent accidental clobbering
   const saveEdit = useCallback(async () => {
     if (!editing.blockId || !agent) return;
 
@@ -174,10 +225,23 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
       return;
     }
 
+    // Show confirmation with diff preview before saving
+    setPendingSave({
+      blockLabel: block.label,
+      original: block.value || '',
+      draft: editing.draftValue,
+    });
+  }, [editing, agent, memoryBlocks, cancelEdit]);
+
+  // Actually perform the save after user confirms
+  const confirmSave = useCallback(async () => {
+    if (!pendingSave || !agent) return;
+
     setEditing((prev) => ({ ...prev, isSaving: true, error: null }));
 
     try {
-      await updateMemoryBlock(agentId, block.label, editing.draftValue);
+      await updateMemoryBlock(agentId, pendingSave.blockLabel, pendingSave.draft);
+      setPendingSave(null);
       // On success, exit edit mode
       setEditing({
         blockId: null,
@@ -192,7 +256,7 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
         error: err instanceof Error ? err.message : "Failed to save memory block",
       }));
     }
-  }, [editing, agent, agentId, memoryBlocks, updateMemoryBlock, cancelEdit]);
+  }, [pendingSave, agent, agentId, updateMemoryBlock]);
 
   // Get color coding for block type
   const getBlockColor = (label: string): string => {
@@ -264,17 +328,61 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
           >
             ARCHIVAL
           </button>
-          <button
-            onClick={() => setActiveTab("sources")}
-            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-              activeTab === "sources"
-                ? "bg-accent text-white"
-                : "text-ink-600 hover:bg-ink-900/5"
-            }`}
-          >
-            SOURCES
-          </button>
         </div>
+      </div>
+
+      {/* Memory residency — where this memory actually lives.
+          Shows storage backend, server host, and short agent id so the
+          user can audit at a glance. */}
+      <div className="flex items-center gap-2 px-4 py-1.5 border-b border-ink-900/10 bg-surface-cream/40 text-[11px] text-ink-600">
+        <span
+          className={`px-1.5 py-0.5 rounded font-medium uppercase tracking-wide ${
+            supportsMemfs
+              ? 'bg-emerald-100 text-emerald-700'
+              : 'bg-ink-900/5 text-ink-500'
+          }`}
+          title={
+            supportsMemfs
+              ? 'memfs detected — agent uses git-backed memory with path-style block labels (files are the source of truth, blocks are a cache)'
+              : 'No memfs signal — agent uses traditional flat memory blocks only'
+          }
+        >
+          {supportsMemfs ? 'memfs' : 'blocks'}
+        </span>
+        <span className="text-ink-400">·</span>
+        <span title="Connected Letta server (brain in a jar)">
+          <span className="text-ink-400">server </span>
+          <span className="font-mono">{residency.host}</span>
+        </span>
+        <span className="text-ink-400">·</span>
+        <span title={agent?.id ?? agentId}>
+          <span className="text-ink-400">agent </span>
+          <span className="font-mono">{residency.shortId}</span>
+        </span>
+        <button
+          onClick={() => navigator.clipboard?.writeText(agent?.id ?? agentId)}
+          className="ml-1 text-ink-400 hover:text-ink-700 transition-colors"
+          title="Copy full agent id"
+          aria-label="Copy full agent id"
+        >
+          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+          </svg>
+        </button>
+        {!supportsMemfs && (
+          <button
+            onClick={() => setShowMemfsEnableConfirm(true)}
+            className="ml-auto px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-[11px] font-medium transition-colors"
+            title="Enable git-backed memfs for this agent. Requires confirmation."
+          >
+            Enable memfs
+          </button>
+        )}
+        {memfsEnableNotice && (
+          <span className="ml-auto text-[11px] text-emerald-700" title={memfsEnableNotice}>
+            {memfsEnableNotice}
+          </span>
+        )}
       </div>
 
       {/* Tab content */}
@@ -283,7 +391,42 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
           <>
             {/* Memory Health Indicator */}
             <div className="mb-4 rounded-xl border border-ink-900/10 bg-surface-secondary p-4">
-              <div className="text-xs font-medium text-ink-700 mb-3">Memory Pressure</div>
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-xs font-medium text-ink-700">Memory Pressure</div>
+                {/* Branch toggle for memfs-compatible agents */}
+                {supportsMemfs && (
+                  <div className="flex items-center gap-1 bg-ink-900/5 rounded-lg p-0.5">
+                    <button
+                      onClick={() => setCoreViewMode("blocks")}
+                      className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors flex items-center gap-1 ${
+                        coreViewMode === "blocks"
+                          ? "bg-surface text-accent shadow-sm"
+                          : "text-ink-500 hover:text-ink-700"
+                      }`}
+                      title="Traditional block view"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                      </svg>
+                      Blocks
+                    </button>
+                    <button
+                      onClick={() => setCoreViewMode("files")}
+                      className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors flex items-center gap-1 ${
+                        coreViewMode === "files"
+                          ? "bg-surface text-accent shadow-sm"
+                          : "text-ink-500 hover:text-ink-700"
+                      }`}
+                      title="File tree view"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                      </svg>
+                      Files
+                    </button>
+                  </div>
+                )}
+              </div>
               <MemoryPressureGauge health={memoryHealth} />
               {memoryHealth.needsAttention && (
                 <div className="mt-3 flex items-center gap-2 text-xs text-amber-600">
@@ -295,13 +438,88 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
               )}
             </div>
 
-            {memoryBlocks.length === 0 ? (
-              <div className="rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-8 text-center">
-                <p className="text-sm text-muted">No memory blocks configured</p>
+            {/* Core view: Blocks or File Tree */}
+            {coreViewMode === "files" && supportsMemfs ? (
+              <div className="rounded-xl border border-ink-900/10 overflow-hidden" style={{ height: '400px' }}>
+                <MemfsFileTree
+                  blocks={memoryBlocks}
+                  onUpdateFile={async (path, content) => {
+                    await updateMemoryBlock(agentId, path, content);
+                  }}
+                  onCreateFile={async (path) => {
+                    try {
+                      await createAndAttachBlock(path, '');
+                      await loadAgent(agentId);
+                    } catch (err) {
+                      console.error('[AgentMemoryPanel] create file failed:', err);
+                      alert(`Failed to create file: ${err instanceof Error ? err.message : String(err)}`);
+                    }
+                  }}
+                  onCreateFolder={async (path) => {
+                    // Folders in memfs are implicit — they exist by virtue of a
+                    // file living under that path. Create a placeholder
+                    // README.md inside so the directory shows up.
+                    try {
+                      const placeholder = path.endsWith('/') ? `${path}README.md` : `${path}/README.md`;
+                      await createAndAttachBlock(placeholder, '');
+                      await loadAgent(agentId);
+                    } catch (err) {
+                      console.error('[AgentMemoryPanel] create folder failed:', err);
+                      alert(`Failed to create folder: ${err instanceof Error ? err.message : String(err)}`);
+                    }
+                  }}
+                  onDeleteNode={async (path) => {
+                    const block = memoryBlocks.find((b) => b.label === path);
+                    if (!block?.id) {
+                      console.warn('[AgentMemoryPanel] delete: no block found for path', path);
+                      return;
+                    }
+                    if (!confirm(`Detach "${path}" from this agent? The block remains in your library; this only removes it from this agent.`)) return;
+                    try {
+                      await getLettaClient().agents.blocks.detach(block.id, { agent_id: agentId });
+                      await loadAgent(agentId);
+                    } catch (err) {
+                      console.error('[AgentMemoryPanel] delete failed:', err);
+                      alert(`Failed to delete: ${err instanceof Error ? err.message : String(err)}`);
+                    }
+                  }}
+                />
               </div>
             ) : (
-              <div className="flex flex-col gap-3">
-                {memoryBlocks.map((block) => {
+              <>
+                <div className="mb-3 flex items-center justify-between">
+                  <span className="text-xs text-ink-500">
+                    {memoryBlocks.length} block{memoryBlocks.length === 1 ? '' : 's'}
+                  </span>
+                  <button
+                    onClick={async () => {
+                      const label = prompt('New block label (use slash-paths for memfs, e.g. "system/skills/git.md"):');
+                      if (!label) return;
+                      const trimmed = label.trim();
+                      if (!trimmed) return;
+                      if (memoryBlocks.some((b) => b.label === trimmed)) {
+                        alert(`A block with label "${trimmed}" already exists on this agent.`);
+                        return;
+                      }
+                      try {
+                        await createAndAttachBlock(trimmed, '');
+                        await loadAgent(agentId);
+                      } catch (err) {
+                        alert(`Failed to create block: ${err instanceof Error ? err.message : String(err)}`);
+                      }
+                    }}
+                    className="px-2 py-1 rounded-md text-xs font-medium text-accent hover:bg-accent/10 transition-colors"
+                  >
+                    + New block
+                  </button>
+                </div>
+                {memoryBlocks.length === 0 ? (
+                  <div className="rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-8 text-center">
+                    <p className="text-sm text-muted">No memory blocks configured</p>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    {memoryBlocks.map((block) => {
                   const tier = classifyTier(block.label);
                   const isExpanded = expandedBlocks.has(block.id);
                   const isEditing = editing.blockId === block.id;
@@ -499,6 +717,8 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
                 })}
               </div>
             )}
+              </>
+            )}
           </>
         )}
 
@@ -640,25 +860,46 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
           </div>
         )}
 
-        {activeTab === "sources" && (
-          <div className="flex flex-col items-center justify-center h-48 text-center">
-            <svg
-              className="h-10 w-10 text-ink-300 mb-3"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={1.5}
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
-              />
-            </svg>
-            <p className="text-sm text-muted">Sources management coming soon</p>
-          </div>
-        )}
       </div>
+
+      {/* Memory block edit confirmation — prevents accidental clobbering */}
+      <ConfirmDialog
+        open={!!pendingSave}
+        variant="default"
+        title={`Save changes to "${pendingSave?.blockLabel}"?`}
+        message={
+          pendingSave
+            ? `You are about to overwrite the memory block "${pendingSave.blockLabel}". ` +
+              `This will replace ${pendingSave.original.length} characters with ${pendingSave.draft.length} characters. ` +
+              `This action cannot be undone.`
+            : ''
+        }
+        confirmLabel="Save Changes"
+        onCancel={() => setPendingSave(null)}
+        onConfirm={confirmSave}
+      />
+
+      <ConfirmDialog
+        open={showMemfsEnableConfirm}
+        title="Enable memfs for this agent?"
+        message={
+          `This enables git-backed memory for "${agent?.name ?? agentId}". After enabling:\n` +
+          `  • Files become the source of truth; existing blocks are seeded as the initial commit.\n` +
+          `  • The server must have the external-memfs core patch applied (check Settings).\n` +
+          `  • The agent will be tagged "git-memory-enabled".\n\n` +
+          `The action runs the slash command "/memfs enable" against this agent's chat. ` +
+          `This UI will copy the command to your clipboard — paste it into the chat to fire it. ` +
+          `(Direct invocation will be wired once AgentWorkspace exposes a setInputValue store action.)`
+        }
+        confirmLabel="Copy /memfs enable"
+        onCancel={() => setShowMemfsEnableConfirm(false)}
+        onConfirm={() => {
+          navigator.clipboard?.writeText('/memfs enable');
+          setShowMemfsEnableConfirm(false);
+          setMemfsEnableNotice('Copied — paste in chat');
+          setTimeout(() => setMemfsEnableNotice(null), 4000);
+        }}
+      />
     </div>
   );
 }

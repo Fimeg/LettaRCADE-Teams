@@ -32,13 +32,15 @@ electron.contextBridge.exposeInMainWorld("electron", {
     // Config APIs
     getConfig: () =>
         ipcInvoke("get-config"),
-    saveConfig: (config: { serverUrl?: string; apiKey?: string; permissionMode?: 'strict' | 'bypass'; windowWidth?: number; windowHeight?: number; theme?: 'light' | 'dark'; pollingInterval?: number }) =>
+    saveConfig: (config: { serverUrl?: string; apiKey?: string; permissionMode?: 'strict' | 'bypass'; windowWidth?: number; windowHeight?: number; theme?: 'light' | 'dark'; pollingInterval?: number; externalMemfsEnabled?: boolean }) =>
         ipcInvoke("save-config", config),
+    getRuntimeEnv: () =>
+        ipcInvoke("get-runtime-env"),
 
     // letta-code subprocess APIs
     lettaCode: {
         getStatus: () => electron.ipcRenderer.invoke("letta-code:get-status"),
-        spawn: (opts?: { cwd?: string }) => electron.ipcRenderer.invoke("letta-code:spawn", opts ?? {}),
+        spawn: (opts?: { cwd?: string; serverUrl?: string; apiKey?: string }) => electron.ipcRenderer.invoke("letta-code:spawn", opts ?? {}),
         stop: () => electron.ipcRenderer.invoke("letta-code:stop"),
         onStatus: (callback: (payload: LettaCodeStatusPayload) => void) => {
             const cb = (_: Electron.IpcRendererEvent, payload: LettaCodeStatusPayload) => callback(payload);
