@@ -9,16 +9,22 @@
 
 import { useState, useEffect } from "react";
 import { useLettaCodeSpawn } from "../hooks/useLettaCodeSpawn";
+import { useAppStore } from "../store/useAppStore";
 
 export type ConnectionMode = "server" | "local";
 
 interface Props {
   mode: ConnectionMode;
   onModeChange: (mode: ConnectionMode) => void;
+  /** Agent the spawn is associated with. Used to (a) substitute `{agentId}` in
+   *  the operator's memfs URL template and (b) read any per-agent metadata
+   *  override (`agent.metadata.letta_memfs_git_url`). */
+  agentId?: string;
 }
 
-export default function ConnectionModeIndicator({ mode, onModeChange }: Props) {
+export default function ConnectionModeIndicator({ mode, onModeChange, agentId }: Props) {
   const { available, status, spawn, stop } = useLettaCodeSpawn();
+  const agent = useAppStore((s) => (agentId ? s.agents[agentId] : null));
   const [spawnError, setSpawnError] = useState<string | null>(null);
 
   // Log status changes for debugging
@@ -55,7 +61,16 @@ export default function ConnectionModeIndicator({ mode, onModeChange }: Props) {
     } else {
       try {
         console.log("[ConnectionModeIndicator] Starting spawn...");
-        const result = await spawn();
+        // Pull per-agent metadata override from the loaded agent record. The
+        // store's `agent.raw` carries the full SDK AgentState; `metadata` is
+        // the freeform server-side field we use for per-agent env overrides.
+        const raw = agent?.raw as { metadata?: Record<string, unknown> } | undefined;
+        const md = raw?.metadata ?? {};
+        const agentMetadataEnv = {
+          letta_memfs_git_url: typeof md.letta_memfs_git_url === "string" ? md.letta_memfs_git_url : undefined,
+          letta_memfs_local: typeof md.letta_memfs_local === "string" ? md.letta_memfs_local : undefined,
+        };
+        const result = await spawn({ agentId, agentMetadataEnv });
         console.log("[ConnectionModeIndicator] Spawn completed:", result);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

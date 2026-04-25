@@ -836,6 +836,7 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
             <ConnectionModeIndicator
               mode={connectionMode}
               onModeChange={setConnectionMode}
+              agentId={agentId}
             />
           )}
 

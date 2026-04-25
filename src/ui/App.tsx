@@ -9,6 +9,7 @@ import { SettingsPanel } from "./components/SettingsPanel";
 import { TeamsView } from "./components/TeamsView";
 import { FavoriteAgentView } from "./components/FavoriteAgentView";
 import { LettaCodeLogPanel } from "./components/LettaCodeLogPanel";
+import { OperatorSetupView } from "./components/OperatorSetupView";
 import { StartSessionModal } from "./components/StartSessionModal";
 import { useIPC } from "./hooks/useIPC";
 
@@ -38,6 +39,9 @@ function App() {
   const setServerConnected = useAppStore((s) => s.setServerConnected);
   const favoriteAgentId = useAppStore((s) => s.favoriteAgentId);
   const setFavoriteAgentId = useAppStore((s) => s.setFavoriteAgentId);
+  const operatorProfile = useAppStore((s) => s.operatorProfile);
+  const operatorProfileLoaded = useAppStore((s) => s.operatorProfileLoaded);
+  const loadOperatorProfile = useAppStore((s) => s.loadOperatorProfile);
   // Full loaded agent record for the favorite — drives recent conversations
   // and the real memory-pressure number on the Home dashboard.
   const favoriteAgentFull = useAppStore((s) => (favoriteAgentId ? s.agents[favoriteAgentId] : null));
@@ -54,6 +58,13 @@ function App() {
     setSelectedAgentId(agentId);
     setActiveTab('agents');
   }, [loadAgentList, setSelectedAgentId, setActiveTab]);
+
+  // Load operator profile on mount. The wizard gate (below) blocks the rest
+  // of the app until this resolves; renderer-only dev (no Electron) marks
+  // loaded=true with profile=null and the gate falls through.
+  useEffect(() => {
+    loadOperatorProfile();
+  }, [loadOperatorProfile]);
 
   // Load agent list on mount (health check)
   useEffect(() => {
@@ -278,6 +289,22 @@ function App() {
     : serverConnected === false
       ? 'text-red-600'
       : 'text-amber-600';
+
+  // First-run gate: Electron present + no operator profile yet → wizard.
+  // Vite-only dev (no `window.electron`) skips so the app stays usable
+  // without an IPC backend; the save call would fail there anyway.
+  const electronCanPersistProfile =
+    typeof window !== 'undefined' && !!window.electron?.saveOperatorProfile;
+  if (!operatorProfileLoaded) {
+    return <div className="h-screen bg-surface" />;
+  }
+  if (!operatorProfile && electronCanPersistProfile) {
+    return (
+      <div className="flex flex-col h-screen bg-surface">
+        <OperatorSetupView />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-screen bg-surface">

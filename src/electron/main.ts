@@ -4,6 +4,13 @@ import { config as dotenvConfig } from "dotenv";
 import { join } from "path";
 import { ipcMainHandle, isDev, DEV_PORT } from "./util.js";
 import { loadConfig, saveConfig, type Config } from "./config.js";
+import { loadOperatorProfile, saveOperatorProfile } from "./operatorProfile.js";
+import {
+    setMemfsToken,
+    hasMemfsToken,
+    clearMemfsToken,
+    getMemfsToken,
+} from "./operatorSecrets.js";
 import { initDatabase, closeDatabase, saveSession, getAllSessions, deleteSession, updateSessionStatus } from "./db.js";
 import type { ClientEvent, ServerEvent } from "./types.js";
 
@@ -211,6 +218,25 @@ app.on("ready", () => {
         return appConfig;
     });
 
+    // Operator profile: setup-first gate. `null` from get → renderer shows the
+    // welcome wizard; save returns the persisted profile.
+    ipcMainHandle("operator-profile:get", () => loadOperatorProfile());
+
+    ipcMainHandle(
+        "operator-profile:save",
+        (_: Electron.IpcMainInvokeEvent, profile: { displayName?: string; memfsGitUrlTemplate?: string }) =>
+            saveOperatorProfile(profile),
+    );
+
+    // Operator secrets — token write-only from renderer; never returned in
+    // plaintext. `getMemfsToken()` is main-process-only and used at spawn time.
+    ipcMainHandle(
+        "operator-secrets:set-memfs-token",
+        (_: Electron.IpcMainInvokeEvent, token: string) => setMemfsToken(token),
+    );
+    ipcMainHandle("operator-secrets:has-memfs-token", () => hasMemfsToken());
+    ipcMainHandle("operator-secrets:clear-memfs-token", () => clearMemfsToken());
+
     // Whitelisted env snapshot for the renderer's Settings panel. Secrets are
     // never sent — booleans reflect presence only.
     ipcMainHandle("get-runtime-env", (): RuntimeEnv => ({
@@ -262,7 +288,7 @@ app.on("ready", () => {
         return lettaCode.getStatus();
     });
 
-    ipcMain.handle("letta-code:spawn", async (_event, opts: { cwd?: string; serverUrl?: string; apiKey?: string } = {}) => {
+    ipcMain.handle("letta-code:spawn", async (_event, opts: { cwd?: string; serverUrl?: string; apiKey?: string; agentId?: string; agentMetadataEnv?: { letta_memfs_git_url?: string; letta_memfs_local?: string } } = {}) => {
         console.log("[ipc:letta-code:spawn] Spawn requested with opts:", { ...opts, apiKey: opts.apiKey ? "(set)" : "(unset)" });
         console.log("[ipc:letta-code:spawn] proxyHandle:", proxyHandle ? `port=${proxyHandle.port}` : "null");
 
@@ -282,11 +308,50 @@ app.on("ready", () => {
             saveConfig(appConfig);
         }
         proxyHandle.setUpstream(upstreamUrl, upstreamKey);
+
+        // Resolve memfs env: per-agent metadata override > operator profile
+        // template (with `{agentId}` substituted, token prefixed from keychain).
+        // Token never crosses IPC; only read here, in main, at spawn time.
+        const extraEnv: Record<string, string | undefined> = {};
+        const profile = loadOperatorProfile();
+        const overrideUrl = opts.agentMetadataEnv?.letta_memfs_git_url;
+        const overrideLocal = opts.agentMetadataEnv?.letta_memfs_local;
+        let resolvedUrl: string | undefined;
+        if (overrideUrl && overrideUrl.trim()) {
+            resolvedUrl = overrideUrl.trim();
+        } else if (profile?.memfsGitUrlTemplate && opts.agentId) {
+            const template = profile.memfsGitUrlTemplate.trim();
+            if (template) resolvedUrl = template.replace("{agentId}", opts.agentId);
+        }
+        if (resolvedUrl) {
+            // Prefix token onto the URL only if missing (operator templates
+            // typically don't embed credentials; per-agent overrides may).
+            const token = getMemfsToken();
+            if (token && !/:\/\/[^/]*@/.test(resolvedUrl)) {
+                resolvedUrl = resolvedUrl.replace(/^(https?:\/\/)/, `$1${token}@`);
+            }
+            extraEnv.LETTA_MEMFS_GIT_URL = resolvedUrl;
+        }
+        if (overrideLocal !== undefined) {
+            extraEnv.LETTA_MEMFS_LOCAL = overrideLocal;
+        } else if (resolvedUrl) {
+            // letta-code expects LETTA_MEMFS_LOCAL=1 alongside a git URL for
+            // the persistent-cache-with-sync pattern. See start-sam.sh etc.
+            extraEnv.LETTA_MEMFS_LOCAL = "1";
+        }
+        console.log("[ipc:letta-code:spawn] resolved env:", {
+            LETTA_MEMFS_GIT_URL: extraEnv.LETTA_MEMFS_GIT_URL ? "(set)" : "(unset)",
+            LETTA_MEMFS_LOCAL: extraEnv.LETTA_MEMFS_LOCAL ?? "(unset)",
+            source: overrideUrl ? "agent-metadata" : profile?.memfsGitUrlTemplate ? "operator-template" : "none",
+            tokenSet: hasMemfsToken(),
+        });
+
         try {
             await lettaCode.spawn({
                 proxyPort: proxyHandle.port,
                 sessionToken: proxyHandle.sessionToken,
                 cwd: opts.cwd,
+                extraEnv,
             });
             const status = lettaCode.getStatus();
             console.log("[ipc:letta-code:spawn] Spawn successful, status:", status);

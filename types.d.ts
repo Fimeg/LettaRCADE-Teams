@@ -39,6 +39,16 @@ type RuntimeEnv = {
     cwd: string;
 }
 
+/** Operator profile — single-human-per-install, see CLAUDE.md "single-user
+ *  ceiling". Secrets live in OS keychain, NOT in this object. */
+type OperatorProfileData = {
+    displayName: string;
+    /** `LETTA_MEMFS_GIT_URL` template; CLI replaces `{agentId}`. */
+    memfsGitUrlTemplate?: string;
+    createdAt: number;
+    updatedAt: number;
+}
+
 type EventPayloadMapping = {
     statistics: Statistics;
     getStaticData: StaticData;
@@ -48,6 +58,11 @@ type EventPayloadMapping = {
     "get-config": ConfigData;
     "save-config": ConfigData;
     "get-runtime-env": RuntimeEnv;
+    "operator-profile:get": OperatorProfileData | null;
+    "operator-profile:save": OperatorProfileData;
+    "operator-secrets:set-memfs-token": boolean;
+    "operator-secrets:has-memfs-token": boolean;
+    "operator-secrets:clear-memfs-token": boolean;
 }
 
 type LettaCodeStatus = "stopped" | "starting" | "running" | "stopping" | "crashed";
@@ -73,10 +88,21 @@ interface Window {
         getConfig: () => Promise<ConfigData>;
         saveConfig: (config: Partial<ConfigData>) => Promise<ConfigData>;
         getRuntimeEnv: () => Promise<RuntimeEnv>;
+        // Operator profile (single-user-per-install setup gate)
+        getOperatorProfile: () => Promise<OperatorProfileData | null>;
+        saveOperatorProfile: (profile: { displayName?: string; memfsGitUrlTemplate?: string }) => Promise<OperatorProfileData>;
+        // Operator secrets — token write-only from renderer. The token never
+        // round-trips back to the renderer in plaintext; only the boolean
+        // "is set" is exposed.
+        operatorSecrets: {
+            setMemfsToken: (token: string) => Promise<boolean>;
+            hasMemfsToken: () => Promise<boolean>;
+            clearMemfsToken: () => Promise<boolean>;
+        };
         // letta-code subprocess APIs
         lettaCode: {
             getStatus: () => Promise<LettaCodeStatusPayload>;
-            spawn: (opts?: { cwd?: string; serverUrl?: string; apiKey?: string }) => Promise<LettaCodeStatusPayload>;
+            spawn: (opts?: { cwd?: string; serverUrl?: string; apiKey?: string; agentId?: string; agentMetadataEnv?: { letta_memfs_git_url?: string; letta_memfs_local?: string } }) => Promise<LettaCodeStatusPayload>;
             stop: () => Promise<LettaCodeStatusPayload>;
             onStatus: (callback: (payload: LettaCodeStatusPayload) => void) => UnsubscribeFunction;
             onLog: (callback: (entry: { stream: "stdout" | "stderr"; line: string }) => void) => UnsubscribeFunction;
