@@ -380,6 +380,11 @@ export function SettingsPanel() {
       <div className="max-w-2xl mx-auto">
         <h1 className="text-xl font-semibold text-ink-900 mb-6">Settings</h1>
 
+        {/* Operator profile (single-user-per-install). Display name + memfs
+            URL template + token live here. Token is set once and stored in
+            the OS keychain; it never round-trips back to the renderer. */}
+        <OperatorProfileCard />
+
         {/* Server Connection */}
         <div className="bg-surface-secondary rounded-xl border border-ink-900/10 p-6 mb-6">
           <h2 className="text-sm font-semibold text-ink-900 mb-4 flex items-center gap-2">
@@ -795,6 +800,176 @@ export function SettingsPanel() {
             <p className="text-xs text-ink-400">Version 0.1.0</p>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Operator profile card — display name + memfs URL template + token controls.
+// Loaded once on mount via Electron IPC. Token is write-only; renderer can
+// only ask whether one is set, never read it back.
+function OperatorProfileCard() {
+  const operatorProfile = useAppStore((s) => s.operatorProfile);
+  const loadOperatorProfile = useAppStore((s) => s.loadOperatorProfile);
+  const saveOperatorProfile = useAppStore((s) => s.saveOperatorProfile);
+
+  const [displayName, setDisplayName] = useState('');
+  const [urlTemplate, setUrlTemplate] = useState('');
+  const [tokenInput, setTokenInput] = useState('');
+  const [tokenSet, setTokenSet] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedFlash, setSavedFlash] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Hydrate inputs from store + ask main whether a token is on file.
+  useEffect(() => {
+    if (operatorProfile) {
+      setDisplayName(operatorProfile.displayName);
+      setUrlTemplate(operatorProfile.memfsGitUrlTemplate ?? '');
+    }
+  }, [operatorProfile]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (typeof window !== 'undefined' && window.electron?.operatorSecrets) {
+      window.electron.operatorSecrets.hasMemfsToken().then((set) => {
+        if (!cancelled) setTokenSet(set);
+      }).catch(() => { /* ignore */ });
+    }
+    return () => { cancelled = true; };
+  }, []);
+
+  const onSaveProfile = async () => {
+    setSaving(true);
+    setError(null);
+    setSavedFlash(null);
+    try {
+      await saveOperatorProfile({
+        displayName: displayName.trim(),
+        memfsGitUrlTemplate: urlTemplate.trim() || undefined,
+      });
+      setSavedFlash('Profile saved.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const onSetToken = async () => {
+    if (!tokenInput.trim()) return;
+    if (typeof window === 'undefined' || !window.electron?.operatorSecrets) return;
+    try {
+      await window.electron.operatorSecrets.setMemfsToken(tokenInput);
+      setTokenSet(true);
+      setTokenInput('');
+      setSavedFlash('Token saved to keychain.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const onClearToken = async () => {
+    if (typeof window === 'undefined' || !window.electron?.operatorSecrets) return;
+    try {
+      await window.electron.operatorSecrets.clearMemfsToken();
+      setTokenSet(false);
+      setSavedFlash('Token cleared.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  // Refresh once on mount so this card works even if the gate already passed.
+  useEffect(() => {
+    if (!operatorProfile) loadOperatorProfile();
+  }, [operatorProfile, loadOperatorProfile]);
+
+  return (
+    <div className="bg-surface-secondary rounded-xl border border-ink-900/10 p-6 mb-6">
+      <h2 className="text-sm font-semibold text-ink-900 mb-1 flex items-center gap-2">
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+        </svg>
+        Operator Profile
+      </h2>
+      <p className="text-xs text-ink-500 mb-4">
+        Single profile per install. Display name surfaces in agent prompts; memfs URL is the default for local-mode spawns.
+      </p>
+
+      <div className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-ink-700 mb-1">Display name</label>
+          <input
+            type="text"
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            placeholder="e.g. Casey"
+            className="w-full px-3 py-2 bg-surface border border-ink-900/10 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent/50"
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-ink-700 mb-1">
+            Memfs git URL template
+          </label>
+          <input
+            type="text"
+            value={urlTemplate}
+            onChange={(e) => setUrlTemplate(e.target.value)}
+            placeholder="http://10.10.20.120:4455/Fimeg/{agentId}.git"
+            className="w-full px-3 py-2 bg-surface border border-ink-900/10 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/50"
+          />
+          <p className="text-xs text-ink-500 mt-1">
+            <code className="font-mono">{'{agentId}'}</code> is replaced at spawn time. The token is prefixed automatically.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-3 flex-wrap">
+          <button
+            onClick={onSaveProfile}
+            disabled={saving || !displayName.trim()}
+            className="px-4 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {saving ? 'Saving…' : 'Save Profile'}
+          </button>
+        </div>
+
+        <div className="border-t border-ink-900/10 pt-4">
+          <label className="block text-sm font-medium text-ink-700 mb-1">
+            Memfs git token
+          </label>
+          <p className="text-xs text-ink-500 mb-2">
+            Stored in the OS keychain. Status: {tokenSet ? <span className="text-green-600 font-medium">Set</span> : <span className="text-ink-500">Not set</span>}
+          </p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <input
+              type="password"
+              value={tokenInput}
+              onChange={(e) => setTokenInput(e.target.value)}
+              placeholder="Paste new token to set/replace"
+              className="flex-1 min-w-[200px] px-3 py-2 bg-surface border border-ink-900/10 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/50"
+            />
+            <button
+              onClick={onSetToken}
+              disabled={!tokenInput.trim()}
+              className="px-3 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Set
+            </button>
+            {tokenSet && (
+              <button
+                onClick={onClearToken}
+                className="px-3 py-2 border border-ink-900/15 text-ink-700 rounded-lg text-sm font-medium hover:bg-ink-50 transition-colors"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
+
+        {error && <p className="text-sm text-error">{error}</p>}
+        {savedFlash && !error && <p className="text-sm text-green-600">{savedFlash}</p>}
       </div>
     </div>
   );

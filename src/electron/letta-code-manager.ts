@@ -33,6 +33,10 @@ interface SpawnOptions {
   proxyPort: number;
   sessionToken: string;
   cwd?: string;
+  /** Extra env vars layered onto the spawn child. Caller is responsible for
+   *  resolving operator-profile templates, decrypting tokens from the
+   *  keychain, and applying per-agent overrides before passing them in. */
+  extraEnv?: Record<string, string | undefined>;
 }
 
 const CLI_MODULE = path.join("@letta-ai", "letta-code", "letta.js");
@@ -106,7 +110,7 @@ export class LettaCodeManager extends EventEmitter {
     this.setState("starting");
 
     // Log spawn configuration for debugging
-    const spawnEnv = {
+    const spawnEnv: Record<string, string | undefined> = {
       ...process.env,
       ELECTRON_RUN_AS_NODE: "1",
       LETTA_BASE_URL: `http://127.0.0.1:${opts.proxyPort}`,
@@ -114,6 +118,13 @@ export class LettaCodeManager extends EventEmitter {
       // Keep the CLI from trying to open a TTY; it should run headless.
       CI: "1",
     };
+    // Layer caller-provided env on top of process.env. `undefined` values are
+    // skipped so we don't shadow inherited vars with missing overrides.
+    if (opts.extraEnv) {
+      for (const [key, value] of Object.entries(opts.extraEnv)) {
+        if (value !== undefined) spawnEnv[key] = value;
+      }
+    }
 
     console.log("[letta-code] Spawning process:");
     console.log(`[letta-code]   execPath: ${process.execPath}`);

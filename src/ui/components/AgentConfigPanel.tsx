@@ -8,7 +8,7 @@ interface ToolAttachment {
   enabled: boolean;
 }
 
-type TabId = 'settings' | 'system' | 'tools';
+type TabId = 'settings' | 'system' | 'tools' | 'env';
 
 interface AgentConfigPanelProps {
   agentId: string;
@@ -112,6 +112,12 @@ export function AgentConfigPanel({ agentId }: AgentConfigPanelProps) {
           active={activeTab === 'tools'}
           onClick={() => setActiveTab('tools')}
         />
+        <TabButton
+          id="env"
+          label="ENV"
+          active={activeTab === 'env'}
+          onClick={() => setActiveTab('env')}
+        />
       </div>
 
       {/* Tab Content */}
@@ -144,6 +150,10 @@ export function AgentConfigPanel({ agentId }: AgentConfigPanelProps) {
             tools={agent.tools}
             onToggle={handleToolToggle}
           />
+        )}
+
+        {activeTab === 'env' && (
+          <EnvTab agentId={agentId} />
         )}
       </div>
     </div>
@@ -458,6 +468,96 @@ function ToggleSwitch({ enabled, onChange }: ToggleSwitchProps) {
 // Loading Spinner Component
 interface LoadingSpinnerProps {
   size?: 'sm' | 'md';
+}
+
+// Per-agent environment override. Writes to `agent.metadata` so the spawn
+// path in main.ts can pick it up alongside the operator-level template.
+// Only override when this agent's repo isn't under the operator's default
+// org — most agents leave both fields empty and ride the operator template.
+function EnvTab({ agentId }: { agentId: string }) {
+  const agents = useAppStore((s) => s.agents);
+  const updateAgent = useAppStore((s) => s.updateAgent);
+  const agent = agents[agentId];
+  const md = (agent?.raw as { metadata?: Record<string, unknown> } | undefined)?.metadata ?? {};
+  const initialUrl = typeof md.letta_memfs_git_url === 'string' ? md.letta_memfs_git_url : '';
+  const initialLocal = typeof md.letta_memfs_local === 'string' ? md.letta_memfs_local : '';
+
+  const [url, setUrl] = useState(initialUrl);
+  const [local, setLocal] = useState(initialLocal);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  const dirty = url !== initialUrl || local !== initialLocal;
+
+  const onSave = async () => {
+    setSaving(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const nextMeta: Record<string, unknown> = { ...md };
+      if (url.trim()) nextMeta.letta_memfs_git_url = url.trim();
+      else delete nextMeta.letta_memfs_git_url;
+      if (local.trim()) nextMeta.letta_memfs_local = local.trim();
+      else delete nextMeta.letta_memfs_local;
+      await updateAgent(agentId, { metadata: nextMeta });
+      setSaved(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h3 className="text-sm font-semibold text-ink-900">Per-agent environment</h3>
+        <p className="mt-1 text-xs text-ink-500">
+          Overrides the operator-level memfs template for this agent only. Leave blank
+          to ride the operator default. Settings are stored in <code className="font-mono">agent.metadata</code>.
+        </p>
+      </div>
+
+      <label className="block">
+        <span className="text-xs font-medium text-ink-700">LETTA_MEMFS_GIT_URL</span>
+        <input
+          type="text"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="e.g. http://host:4455/Other/repo.git"
+          className="mt-1 w-full px-3 py-2 rounded-lg border border-ink-900/15 bg-surface text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent"
+        />
+        <span className="mt-1 block text-[11px] text-ink-500">
+          Use <code className="font-mono">{'{agentId}'}</code> in the operator template if you want it substituted; this per-agent field is a literal URL.
+        </span>
+      </label>
+
+      <label className="block">
+        <span className="text-xs font-medium text-ink-700">LETTA_MEMFS_LOCAL</span>
+        <input
+          type="text"
+          value={local}
+          onChange={(e) => setLocal(e.target.value)}
+          placeholder="(usually 1, blank to inherit)"
+          className="mt-1 w-full px-3 py-2 rounded-lg border border-ink-900/15 bg-surface text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent"
+        />
+      </label>
+
+      {error && <p className="text-xs text-error">{error}</p>}
+
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onSave}
+          disabled={!dirty || saving}
+          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+        {saved && <span className="text-xs text-green-600">Saved.</span>}
+      </div>
+    </div>
+  );
 }
 
 function LoadingSpinner({ size = 'md' }: LoadingSpinnerProps) {

@@ -38,7 +38,7 @@ export function useLettaCodeSpawn() {
   }, [api]);
 
   const spawn = useCallback(
-    async (opts?: { cwd?: string }) => {
+    async (opts?: { cwd?: string; agentId?: string; agentMetadataEnv?: { letta_memfs_git_url?: string; letta_memfs_local?: string } }) => {
       if (!api) {
         const errMsg = "letta-code is only available in the desktop app";
         console.error(`[useLettaCodeSpawn] ${errMsg}`);

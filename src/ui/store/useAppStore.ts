@@ -199,6 +199,10 @@ interface AppState {
   lastConversationPerAgent: Record<string, string>;
   /** Persisted favorite agent ID for the "home" dashboard view */
   favoriteAgentId: string | null;
+  /** Operator profile (single-user-per-install). `null` after load = setup
+   *  wizard should be shown. Loaded once at app boot via Electron IPC. */
+  operatorProfile: OperatorProfileData | null;
+  operatorProfileLoaded: boolean;
   prompt: string;
   cwd: string;
   pendingStart: boolean;
@@ -226,6 +230,8 @@ interface AppState {
   setServerConnected: (connected: boolean | null) => void;
   setActiveConversationId: (id: string | null) => void;
   setFavoriteAgentId: (id: string | null) => void;
+  loadOperatorProfile: () => Promise<void>;
+  saveOperatorProfile: (profile: { displayName?: string; memfsGitUrlTemplate?: string }) => Promise<void>;
   loadAgentList: () => Promise<void>;
   loadAgent: (id: string) => Promise<void>;
   deleteAgent: (id: string) => Promise<void>;
@@ -312,6 +318,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeConversationId: null,
   lastConversationPerAgent: {},
   favoriteAgentId: getStoredFavorite(),
+  operatorProfile: null,
+  operatorProfileLoaded: false,
   prompt: "",
   cwd: "",
   pendingStart: false,
@@ -341,6 +349,31 @@ export const useAppStore = create<AppState>((set, get) => ({
   setFavoriteAgentId: (id) => {
     setStoredFavorite(id);
     set({ favoriteAgentId: id });
+  },
+
+  loadOperatorProfile: async () => {
+    if (typeof window === 'undefined' || !window.electron?.getOperatorProfile) {
+      // Non-Electron context (Vite-only dev). Mark loaded so the gate
+      // doesn't block; profile stays null but the wizard won't render
+      // because save would fail anyway (see App.tsx gate condition).
+      set({ operatorProfileLoaded: true, operatorProfile: null });
+      return;
+    }
+    try {
+      const profile = await window.electron.getOperatorProfile();
+      set({ operatorProfile: profile, operatorProfileLoaded: true });
+    } catch (err) {
+      console.error('[operator-profile] load failed:', err);
+      set({ operatorProfileLoaded: true });
+    }
+  },
+
+  saveOperatorProfile: async (partial) => {
+    if (typeof window === 'undefined' || !window.electron?.saveOperatorProfile) {
+      throw new Error('Operator profile save unavailable (no Electron context)');
+    }
+    const saved = await window.electron.saveOperatorProfile(partial);
+    set({ operatorProfile: saved });
   },
   setActiveConversationId: (activeConversationId) => set((state) => {
     const agentId = state.selectedAgentId;
