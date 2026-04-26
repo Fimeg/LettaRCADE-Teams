@@ -394,3 +394,133 @@ export const systemApi = {
     }
   },
 };
+
+// =============================================================================
+// Provider API (BYOK provider management)
+// =============================================================================
+
+export type ProviderCategory = 'base' | 'byok';
+
+export type ProviderType =
+  | 'anthropic' | 'azure' | 'baseten' | 'bedrock' | 'cerebras'
+  | 'chatgpt_oauth' | 'deepseek' | 'fireworks' | 'google_ai'
+  | 'google_vertex' | 'groq' | 'hugging-face' | 'letta'
+  | 'lmstudio_openai' | 'minimax' | 'mistral' | 'ollama'
+  | 'openai' | 'together' | 'vllm' | 'sglang' | 'openrouter' | 'xai'
+  | 'zai' | 'zai_coding';
+
+export interface Provider {
+  id: string;
+  name: string;
+  provider_type: ProviderType;
+  provider_category: ProviderCategory;
+  api_key: string | null;
+  base_url: string | null;
+  access_key: string | null;
+  region: string | null;
+  api_version: string | null;
+  organization_id: string;
+  updated_at: string;
+  last_synced: string | null;
+  // Encrypted fields (prefixed with _enc in some responses)
+  api_key_enc?: string;
+  access_key_enc?: string;
+}
+
+/**
+ * Provider API client using raw fetch (not wrapped in SDK yet).
+ * The /v1/providers/ endpoints exist on OSS 16.7+ but aren't in the official SDK.
+ */
+export const providersApi = {
+  /**
+   * List all configured providers from the server.
+   * Returns both base (Letta-hosted) and BYOK (user-configured) providers.
+   */
+  listProviders: async (): Promise<Provider[]> => {
+    const baseURL = getApiBase();
+    const apiKey = getApiKey();
+    const headers: Record<string, string> = {};
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+    try {
+      const response = await fetch(`${baseURL.replace(/\/$/, '')}/v1/providers/`, {
+        method: 'GET',
+        headers,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server returned ${response.status}`);
+      }
+
+      return await response.json() as Provider[];
+    } catch (err) {
+      console.error('[providersApi] Failed to list providers:', err);
+      throw err;
+    }
+  },
+
+  /**
+   * Refresh a BYOK provider to fetch the latest models from its API.
+   * Calls PATCH /v1/providers/{provider_id}/refresh
+   */
+  refreshProvider: async (providerId: string): Promise<Provider> => {
+    const baseURL = getApiBase();
+    const apiKey = getApiKey();
+    const headers: Record<string, string> = {};
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+    try {
+      const response = await fetch(`${baseURL.replace(/\/$/, '')}/v1/providers/${providerId}/refresh`, {
+        method: 'PATCH',
+        headers,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server returned ${response.status}`);
+      }
+
+      return await response.json() as Provider;
+    } catch (err) {
+      console.error(`[providersApi] Failed to refresh provider ${providerId}:`, err);
+      throw err;
+    }
+  },
+
+  /**
+   * Delete/remove a provider configuration.
+   * Calls DELETE /v1/providers/{provider_id}
+   */
+  deleteProvider: async (providerId: string): Promise<void> => {
+    const baseURL = getApiBase();
+    const apiKey = getApiKey();
+    const headers: Record<string, string> = {};
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+    try {
+      const response = await fetch(`${baseURL.replace(/\/$/, '')}/v1/providers/${providerId}`, {
+        method: 'DELETE',
+        headers,
+      });
+
+      if (!response.ok && response.status !== 204) {
+        throw new Error(`Server returned ${response.status}`);
+      }
+    } catch (err) {
+      console.error(`[providersApi] Failed to delete provider ${providerId}:`, err);
+      throw err;
+    }
+  },
+
+  /**
+   * Check if the providers endpoint is available on this server.
+   * Some self-hosted servers may not have the provider management feature.
+   */
+  isAvailable: async (): Promise<boolean> => {
+    try {
+      await providersApi.listProviders();
+      return true;
+    } catch {
+      return false;
+    }
+  },
+};
