@@ -12,6 +12,11 @@ import { LettaCodeLogPanel } from "./components/LettaCodeLogPanel";
 import { OperatorSetupView } from "./components/OperatorSetupView";
 import { StartSessionModal } from "./components/StartSessionModal";
 import { useIPC } from "./hooks/useIPC";
+import { TopNav, TopNavTitle, TopNavActions } from "./components/ui/layout/TopNav";
+import { Tabs, TabsList, TabsTrigger } from "./components/ui/layout/Tabs";
+import { Button } from "./components/ui/primitives/Button";
+import { Icon } from "./components/ui/primitives/Icon";
+import { Home, MonitorSmartphone, Settings, ArrowRight, Users } from "lucide-react";
 
 function App() {
   // Modal state
@@ -104,20 +109,12 @@ function App() {
     setSelectedAgentId(null);
   }, [setSelectedAgentId]);
 
-  // Tab button component
-  const TabButton = ({ tab, label, icon }: { tab: TopTab; label: string; icon: React.ReactNode }) => (
-    <button
-      onClick={() => setActiveTab(tab)}
-      className={`flex items-center gap-2 px-4 py-2 text-sm font-medium transition-colors ${
-        activeTab === tab
-          ? 'text-accent border-b-2 border-accent'
-          : 'text-ink-600 hover:text-ink-900'
-      }`}
-    >
-      {icon}
-      {label}
-    </button>
-  );
+  // Tab configuration with icons
+  const mainTabs = useMemo(() => [
+    { id: 'home' as TopTab, label: 'Home', icon: Home },
+    { id: 'agents' as TopTab, label: 'Agents', icon: MonitorSmartphone },
+    { id: 'settings' as TopTab, label: 'Settings', icon: Settings },
+  ], []);
 
   // Determine main content based on state. The active tab is the single
   // source of truth — switching tabs from inside an agent leaves the agent
@@ -274,21 +271,16 @@ function App() {
   // own header instead of sharing tab chrome.
   const isTeamsMode = activeTab === 'teams';
 
-  const statusDotColor = serverConnected === true
-    ? 'bg-green-500'
-    : serverConnected === false
-      ? 'bg-red-500'
-      : 'bg-amber-500';
-  const statusLabel = serverConnected === true
-    ? 'Connected'
-    : serverConnected === false
-      ? 'Disconnected'
-      : 'Connecting…';
-  const statusTextColor = serverConnected === true
-    ? 'text-green-600'
-    : serverConnected === false
-      ? 'text-red-600'
-      : 'text-amber-600';
+  // Connection status for header display
+  const statusConfig = useMemo(() => {
+    if (serverConnected === true) {
+      return { dotColor: 'bg-green-500', label: 'Connected', textColor: 'text-green-600' };
+    }
+    if (serverConnected === false) {
+      return { dotColor: 'bg-red-500', label: 'Disconnected', textColor: 'text-red-600' };
+    }
+    return { dotColor: 'bg-amber-500', label: 'Connecting…', textColor: 'text-amber-600' };
+  }, [serverConnected]);
 
   // First-run gate: Electron present + no operator profile yet → wizard.
   // Vite-only dev (no `window.electron`) skips so the app stays usable
@@ -309,74 +301,64 @@ function App() {
   return (
     <div className="flex flex-col h-screen bg-surface">
       {isTeamsMode ? (
-        // ═══ Teams takeover header ═══
-        <header className="flex items-center justify-between h-14 border-b border-ink-900/10 bg-surface select-none px-4">
+        // === Teams takeover header ===
+        <TopNav
+          actions={
+            <Button variant="ghost" size="sm" onClick={() => setActiveTab('agents')}>
+              <Icon icon={ArrowRight} size="sm" className="mr-1 rotate-180" />
+              Back to ADE
+            </Button>
+          }
+        >
           <div className="flex items-center gap-3">
             <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent/10 text-accent">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-4a4 4 0 100-8 4 4 0 000 8zm6 4a3 3 0 100-6 3 3 0 000 6zM6 14a3 3 0 100-6 3 3 0 000 6z" />
-              </svg>
+              <Icon icon={Users} size="md" />
             </div>
-            <div className="flex flex-col leading-tight">
-              <span className="text-sm font-semibold text-ink-900">Letta Teams</span>
-              <span className="text-[11px] text-ink-500">Multi-agent orchestration</span>
-            </div>
+            <TopNavTitle title="Letta Teams" subtitle="Multi-agent orchestration" />
           </div>
-          <button
-            onClick={() => setActiveTab('agents')}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-ink-700 hover:bg-ink-900/5 rounded-lg transition-colors"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-            </svg>
-            Back to ADE
-          </button>
-        </header>
+        </TopNav>
       ) : (
-        // ═══ ADE header — brand stack on left, status under brand ═══
-        <header className="flex items-center justify-between h-14 border-b border-ink-900/10 bg-surface select-none px-4">
-          <div className="flex items-center gap-6">
-            <div className="flex flex-col leading-tight">
+        // === ADE header with Tabs navigation ===
+        <TopNav
+          actions={
+            <TopNavActions>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setActiveTab('teams')}
+                className="text-accent hover:text-accent hover:bg-accent/10"
+                title="Open Letta Teams — multi-agent orchestration"
+              >
+                <Icon icon={Users} size="sm" className="mr-1.5" />
+                Teams
+                <Icon icon={ArrowRight} size="sm" className="ml-1.5 opacity-60" />
+              </Button>
+            </TopNavActions>
+          }
+        >
+          <div className="flex items-center gap-6 flex-1">
+            {/* Brand with status */}
+            <div className="flex flex-col leading-tight min-w-[140px]">
               <span className="text-sm font-semibold text-ink-900">Letta Community ADE</span>
               <div className="flex items-center gap-1.5">
-                <span className={`w-1.5 h-1.5 rounded-full ${statusDotColor}`} />
-                <span className={`text-[11px] ${statusTextColor}`}>{statusLabel}</span>
+                <span className={`w-1.5 h-1.5 rounded-full ${statusConfig.dotColor}`} />
+                <span className={`text-[11px] ${statusConfig.textColor}`}>{statusConfig.label}</span>
               </div>
             </div>
-            <nav className="flex items-center">
-              <TabButton
-                tab="home"
-                label="Home"
-                icon={<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>}
-              />
-              <TabButton
-                tab="agents"
-                label="Agents"
-                icon={<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>}
-              />
-              <TabButton
-                tab="settings"
-                label="Settings"
-                icon={<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>}
-              />
-            </nav>
+
+            {/* Main navigation tabs */}
+            <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TopTab)}>
+              <TabsList>
+                {mainTabs.map((tab) => (
+                  <TabsTrigger key={tab.id} value={tab.id}>
+                    <Icon icon={tab.icon} size="sm" />
+                    {tab.label}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
           </div>
-          {/* Teams launcher — promoted to a primary action since it's its
-              own surface, not a sibling tab. */}
-          <button
-            onClick={() => setActiveTab('teams')}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-accent hover:bg-accent/10 rounded-lg transition-colors"
-            title="Open Letta Teams — multi-agent orchestration"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-4a4 4 0 100-8 4 4 0 000 8zm6 4a3 3 0 100-6 3 3 0 000 6zM6 14a3 3 0 100-6 3 3 0 000 6z" />
-            </svg>
-            Teams
-            <svg className="w-3 h-3 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-            </svg>
-          </button>
-        </header>
+        </TopNav>
       )}
 
       {/* Main content area */}

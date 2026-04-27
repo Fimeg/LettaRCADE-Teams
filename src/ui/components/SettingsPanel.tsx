@@ -1,6 +1,12 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { resetClient, systemApi, listLLMModels, listEmbeddingModels, providersApi, getApiBase, getApiKey, type ExternalMemfsStatus, type Provider } from '../services/api';
+import { Tabs, TabsList, TabsTrigger } from './ui/layout/Tabs';
+import { FormField } from './ui/composites/FormField';
+import { Input } from './ui/primitives/Input';
+import { Button } from './ui/primitives/Button';
+import { Icon } from './ui/primitives/Icon';
+import { Cog, FlaskConical, Puzzle, Terminal, Info, Check } from 'lucide-react';
 
 const API_BASE_KEY = 'letta_api_url';
 const API_KEY_STORAGE = 'letta_api_key';
@@ -13,56 +19,15 @@ type SettingsTab = 'general' | 'providers' | 'integrations' | 'advanced' | 'abou
 interface TabConfig {
   id: SettingsTab;
   label: string;
-  icon: (props: { className?: string }) => React.ReactNode;
+  icon: typeof Cog;
 }
 
 const TABS: TabConfig[] = [
-  {
-    id: 'general',
-    label: 'General',
-    icon: ({ className }) => (
-      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-      </svg>
-    ),
-  },
-  {
-    id: 'providers',
-    label: 'Providers',
-    icon: ({ className }) => (
-      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
-      </svg>
-    ),
-  },
-  {
-    id: 'integrations',
-    label: 'Integrations',
-    icon: ({ className }) => (
-      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z" />
-      </svg>
-    ),
-  },
-  {
-    id: 'advanced',
-    label: 'Advanced',
-    icon: ({ className }) => (
-      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-      </svg>
-    ),
-  },
-  {
-    id: 'about',
-    label: 'About',
-    icon: ({ className }) => (
-      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-      </svg>
-    ),
-  },
+  { id: 'general', label: 'General', icon: Cog },
+  { id: 'providers', label: 'Providers', icon: FlaskConical },
+  { id: 'integrations', label: 'Integrations', icon: Puzzle },
+  { id: 'advanced', label: 'Advanced', icon: Terminal },
+  { id: 'about', label: 'About', icon: Info },
 ];
 
 /** Renders the whitelisted env snapshot from the main process. Secrets are
@@ -218,56 +183,56 @@ function ServerConnectionSection() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <label className="block text-sm font-medium text-ink-700 mb-1">
-          Letta Server URL
-        </label>
-        <input
+      <FormField
+        label="Letta Server URL"
+        htmlFor="api-url"
+        helperText="Your Letta server address (e.g., http://10.10.20.19:8283)"
+      >
+        <Input
+          id="api-url"
           type="url"
           value={apiUrl}
           onChange={(e) => setApiUrl(e.target.value)}
           placeholder="http://localhost:8283"
-          className="w-full px-3 py-2 bg-surface border border-ink-900/10 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent/50"
+          className="w-full"
         />
-        <p className="text-xs text-ink-500 mt-1">
-          Your Letta server address (e.g., http://10.10.20.19:8283)
-        </p>
-      </div>
+      </FormField>
 
-      <div>
-        <label className="block text-sm font-medium text-ink-700 mb-1">
-          API Key (optional)
-        </label>
-        <input
+      <FormField
+        label="API Key (optional)"
+        htmlFor="api-key"
+        helperText="Required for cloud (letta.com), optional for local servers"
+      >
+        <Input
+          id="api-key"
           type="password"
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
           placeholder="Leave empty if not required"
-          className="w-full px-3 py-2 bg-surface border border-ink-900/10 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent/50"
+          className="w-full"
         />
-        <p className="text-xs text-ink-500 mt-1">
-          Required for cloud (letta.com), optional for local servers
-        </p>
-      </div>
+      </FormField>
 
       <div className="flex items-center gap-3 flex-wrap">
-        <button
+        <Button
           onClick={handleSave}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-            saved
-              ? 'bg-green-500 text-white'
-              : 'bg-accent text-white hover:bg-accent-hover'
-          }`}
+          variant={saved ? 'secondary' : 'primary'}
+          className={saved ? 'bg-green-500 hover:bg-green-500' : ''}
         >
-          {saved ? 'Saved!' : 'Save & Reload'}
-        </button>
-        <button
-          onClick={handleTest}
-          className="px-4 py-2 rounded-lg text-sm font-medium border border-ink-300 text-ink-700 hover:bg-ink-50 transition-colors"
-        >
+          {saved ? (
+            <>
+              <Icon icon={Check} size="sm" className="mr-1.5" />
+              Saved!
+            </>
+          ) : (
+            'Save & Reload'
+          )}
+        </Button>
+        <Button variant="secondary" onClick={handleTest}>
           Test Connection
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="ghost"
           onClick={() => {
             localStorage.removeItem(API_BASE_KEY);
             localStorage.removeItem(API_KEY_STORAGE);
@@ -277,10 +242,9 @@ function ServerConnectionSection() {
             setTestResult({ success: true, message: 'Reset to default (Vite proxy). Reloading...' });
             setTimeout(() => location.reload(), 1000);
           }}
-          className="px-4 py-2 rounded-lg text-sm font-medium text-ink-500 hover:text-ink-700 hover:bg-ink-50 transition-colors"
         >
           Reset to Default
-        </button>
+        </Button>
       </div>
 
       {testResult && (
@@ -378,75 +342,79 @@ function OperatorProfileSection() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <label className="block text-sm font-medium text-ink-700 mb-1">Display name</label>
-        <input
+      <FormField
+        label="Display name"
+        htmlFor="display-name"
+        helperText="Surfaces in agent prompts and UI"
+      >
+        <Input
+          id="display-name"
           type="text"
           value={displayName}
           onChange={(e) => setDisplayName(e.target.value)}
           placeholder="e.g. Casey"
-          className="w-full px-3 py-2 bg-surface border border-ink-900/10 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent/50"
+          className="w-full"
         />
-        <p className="text-xs text-ink-500 mt-1">Surfaces in agent prompts and UI</p>
-      </div>
+      </FormField>
 
-      <div>
-        <label className="block text-sm font-medium text-ink-700 mb-1">
-          Memfs git URL template
-        </label>
-        <input
+      <FormField
+        label="Memfs git URL template"
+        htmlFor="git-template"
+        helperText={`${'{agentId}'} is replaced at spawn time. The token is prefixed automatically.`}
+      >
+        <Input
+          id="git-template"
           type="text"
           value={urlTemplate}
           onChange={(e) => setUrlTemplate(e.target.value)}
           placeholder="http://10.10.20.120:4455/Fimeg/{agentId}.git"
-          className="w-full px-3 py-2 bg-surface border border-ink-900/10 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/50"
+          className="w-full font-mono"
         />
-        <p className="text-xs text-ink-500 mt-1">
-          <code className="font-mono">{'{agentId}'}</code> is replaced at spawn time. The token is prefixed automatically.
-        </p>
-      </div>
+      </FormField>
 
       <div className="flex items-center gap-3 flex-wrap">
-        <button
+        <Button
           onClick={onSaveProfile}
           disabled={saving || !displayName.trim()}
-          className="px-4 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          isLoading={saving}
         >
           {saving ? 'Saving…' : 'Save Profile'}
-        </button>
+        </Button>
       </div>
 
       <div className="border-t border-ink-900/10 pt-4">
-        <label className="block text-sm font-medium text-ink-700 mb-1">
-          Memfs git token
-        </label>
-        <p className="text-xs text-ink-500 mb-2">
-          Stored in the OS keychain. Status: {tokenSet ? <span className="text-green-600 font-medium">Set</span> : <span className="text-ink-500">Not set</span>}
-        </p>
-        <div className="flex items-center gap-2 flex-wrap">
-          <input
-            type="password"
-            value={tokenInput}
-            onChange={(e) => setTokenInput(e.target.value)}
-            placeholder="Paste new token to set/replace"
-            className="flex-1 min-w-[200px] px-3 py-2 bg-surface border border-ink-900/10 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/50"
-          />
-          <button
-            onClick={onSetToken}
-            disabled={!tokenInput.trim()}
-            className="px-3 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Set
-          </button>
-          {tokenSet && (
-            <button
-              onClick={onClearToken}
-              className="px-3 py-2 border border-ink-900/15 text-ink-700 rounded-lg text-sm font-medium hover:bg-ink-50 transition-colors"
+        <FormField
+          label="Memfs git token"
+          htmlFor="memfs-token"
+          helperText={`Stored in the OS keychain. Status: ${tokenSet ? 'Set' : 'Not set'}`}
+        >
+          <div className="flex items-center gap-2 flex-wrap">
+            <Input
+              id="memfs-token"
+              type="password"
+              value={tokenInput}
+              onChange={(e) => setTokenInput(e.target.value)}
+              placeholder="Paste new token to set/replace"
+              className="flex-1 min-w-[200px] font-mono"
+            />
+            <Button
+              onClick={onSetToken}
+              disabled={!tokenInput.trim()}
+              size="sm"
             >
-              Clear
-            </button>
-          )}
-        </div>
+              Set
+            </Button>
+            {tokenSet && (
+              <Button
+                variant="secondary"
+                onClick={onClearToken}
+                size="sm"
+              >
+                Clear
+              </Button>
+            )}
+          </div>
+        </FormField>
       </div>
 
       {error && <p className="text-sm text-error">{error}</p>}
@@ -504,13 +472,15 @@ function ModelDefaultsSection() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-ink-600">Default models for new agents</p>
-        <button
+        <Button
+          variant="secondary"
           onClick={refreshModels}
           disabled={modelsLoading || !serverConnected}
-          className="px-2 py-1 rounded-md text-xs font-medium border border-ink-300 text-ink-600 hover:bg-ink-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          isLoading={modelsLoading}
+          size="sm"
         >
           {modelsLoading ? 'Refreshing…' : 'Refresh'}
-        </button>
+        </Button>
       </div>
 
       {!serverConnected ? (
@@ -1551,31 +1521,28 @@ export function SettingsPanel() {
 
   return (
     <div className="h-full bg-surface flex">
-      {/* Sidebar */}
+      {/* Sidebar with Tabs */}
       <div className="w-56 border-r border-ink-900/10 bg-surface-secondary/50 flex flex-col">
         <div className="p-4 border-b border-ink-900/10">
           <h1 className="font-semibold text-ink-900">Settings</h1>
         </div>
-        <nav className="flex-1 p-2 space-y-1">
-          {TABS.map((tab) => {
-            const Icon = tab.icon;
-            const isActive = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  isActive
-                    ? 'bg-accent text-white'
-                    : 'text-ink-600 hover:bg-ink-900/5'
-                }`}
-              >
-                <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-ink-500'}`} />
-                {tab.label}
-              </button>
-            );
-          })}
-        </nav>
+        <div className="flex-1 py-2">
+          <Tabs
+            value={activeTab}
+            onValueChange={(v) => setActiveTab(v as SettingsTab)}
+            orientation="vertical"
+            variant="pill"
+          >
+            <TabsList className="flex-col gap-1 px-2">
+              {TABS.map((tab) => (
+                <TabsTrigger key={tab.id} value={tab.id} className="w-full justify-start gap-3">
+                  <Icon icon={tab.icon} size="sm" />
+                  {tab.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+        </div>
       </div>
 
       {/* Content */}

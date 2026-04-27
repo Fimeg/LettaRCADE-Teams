@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Panel, Group as PanelGroup, Separator as Separator } from "react-resizable-panels";
+import { SplitPanePanel, SplitPaneGroup, SplitPaneDivider } from "./ui/layout/SplitPane";
 import { useAppStore, isMemfsEnabledAgent, isConversationStale } from "../store/useAppStore";
 import { useMessageWindow } from "../hooks/useMessageWindow";
 import { useIPC } from "../hooks/useIPC";
@@ -12,6 +12,7 @@ import type { ClientEvent, ServerEvent } from "../types";
 import { MessageCard } from "./EventCard";
 import MDContent from "../render/markdown";
 import { AgentMemoryPanel } from "./AgentMemoryPanel";
+import { ToolStatusProvider } from "../contexts";
 import ConnectionModeIndicator, { ConnectionMode } from "./ConnectionModeIndicator";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { useAgentNickname } from "../hooks/useAgentNickname";
@@ -130,6 +131,44 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
   const [cfgTags, setCfgTags] = useState('');
   const [cfgModelEndpoint, setCfgModelEndpoint] = useState('');
 
+  // Config form population helper - defined early for useEffect access
+  const populateConfigForm = useCallback((r: Record<string, unknown>) => {
+    const llm = (r.llm_config as Record<string, unknown>) || {};
+    setCfgName((r.name as string) || '');
+    setCfgDesc((r.description as string) || '');
+    setCfgModel((r.model as string) || (llm.handle as string) || (llm.model as string) || '');
+    setCfgEmbedding((r.embedding as string) || '');
+    setCfgContextWindow(
+      (r.context_window_limit as number)?.toString() || (llm.context_window as number)?.toString() || ''
+    );
+    setCfgMaxTokens((llm.max_tokens as number)?.toString() || '');
+    setCfgEnableReasoner((llm.enable_reasoner as boolean) || false);
+    setCfgMaxReasoningTokens((llm.max_reasoning_tokens as number)?.toString() || '');
+    setCfgEffort((llm.effort as string) || '');
+    setCfgFreqPenalty((llm.frequency_penalty as number)?.toString() || '');
+    setCfgParallelToolCalls((llm.parallel_tool_calls as boolean) || false);
+    setCfgSleeptime((r.enable_sleeptime as boolean) || false);
+    setCfgAutoclear((r.message_buffer_autoclear as boolean) || false);
+    setCfgTags(((r.tags as string[]) || []).join(', '));
+    setCfgModelEndpoint((llm.model_endpoint as string) || '');
+  }, [
+    setCfgName,
+    setCfgDesc,
+    setCfgModel,
+    setCfgEmbedding,
+    setCfgContextWindow,
+    setCfgMaxTokens,
+    setCfgEnableReasoner,
+    setCfgMaxReasoningTokens,
+    setCfgEffort,
+    setCfgFreqPenalty,
+    setCfgParallelToolCalls,
+    setCfgSleeptime,
+    setCfgAutoclear,
+    setCfgTags,
+    setCfgModelEndpoint,
+  ]);
+
   // Tools state
   const [agentTools, setAgentTools] = useState<ToolInfo[]>([]);
   const [allTools, setAllTools] = useState<ToolInfo[]>([]);
@@ -156,8 +195,9 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
   const shouldRestoreScrollRef = useRef(false);
   const prevMessagesLengthRef = useRef(0);
 
-  // Connection mode
+  // Connection mode (3-mode architecture: server / local / remote)
   const [connectionMode, setConnectionMode] = useState<ConnectionMode>('server');
+  const [remoteUrl, setRemoteUrl] = useState<string>('');
 
   // Focus mode: collapses the workspace down to just the chat stream — no
   // settings, no memory panel, no model badge / connection chip / slash
@@ -213,7 +253,7 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
       populateConfigForm(agent.raw);
       setSystemDraft(String(agent.raw.system ?? ''));
     }
-  }, [agent?.raw]);
+  }, [agent?.raw, populateConfigForm]);
 
   // Load agent tools
   useEffect(() => {
@@ -394,27 +434,6 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
   }, [resetToLatest]);
 
   // ═══ CONFIG FORM ═══
-
-  const populateConfigForm = useCallback((r: Record<string, unknown>) => {
-    const llm = (r.llm_config as Record<string, unknown>) || {};
-    setCfgName((r.name as string) || '');
-    setCfgDesc((r.description as string) || '');
-    setCfgModel((r.model as string) || (llm.handle as string) || (llm.model as string) || '');
-    setCfgEmbedding((r.embedding as string) || '');
-    setCfgContextWindow(
-      (r.context_window_limit as number)?.toString() || (llm.context_window as number)?.toString() || ''
-    );
-    setCfgMaxTokens((llm.max_tokens as number)?.toString() || '');
-    setCfgEnableReasoner((llm.enable_reasoner as boolean) || false);
-    setCfgMaxReasoningTokens((llm.max_reasoning_tokens as number)?.toString() || '');
-    setCfgEffort((llm.effort as string) || '');
-    setCfgFreqPenalty((llm.frequency_penalty as number)?.toString() || '');
-    setCfgParallelToolCalls((llm.parallel_tool_calls as boolean) || false);
-    setCfgSleeptime((r.enable_sleeptime as boolean) || false);
-    setCfgAutoclear((r.message_buffer_autoclear as boolean) || false);
-    setCfgTags(((r.tags as string[]) || []).join(', '));
-    setCfgModelEndpoint((llm.model_endpoint as string) || '');
-  }, []);
 
   // Build a diff + update payload by comparing the current form state against
   // the server's last-known agent config. Returns null when nothing changed.
@@ -836,6 +855,8 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
             <ConnectionModeIndicator
               mode={connectionMode}
               onModeChange={setConnectionMode}
+              remoteUrl={remoteUrl}
+              onRemoteUrlChange={setRemoteUrl}
               agentId={agentId}
             />
           )}
@@ -968,19 +989,19 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
         </div>
       </header>
 
-      {/* 3-Pane Layout — collapses to chat-only in focus mode. The PanelGroup
+      {/* 3-Pane Layout — collapses to chat-only in focus mode. The SplitPaneGroup
           re-balances when its children change, so wrapping the side panels +
-          their separators in `{!focusMode && ...}` is enough. We use a
+          their dividers in `{!focusMode && ...}` is enough. We use a
           `key` tied to focus state so the group resets cleanly between
           modes (without it, leftover panel sizes can bleed across). */}
-      <PanelGroup
+      <SplitPaneGroup
         key={focusMode ? 'focus' : 'full'}
         orientation="horizontal"
         className="flex-1 min-h-0"
       >
         {/* Left: Settings Panel */}
         {!focusMode && (
-        <Panel defaultSize={25} minSize={15} maxSize={40}>
+        <SplitPanePanel defaultSize={25} minSize={15} maxSize={40}>
           <div className="h-full flex flex-col bg-surface border-r border-ink-900/10">
             {/* Settings Tabs */}
             <div className="flex border-b border-ink-900/10">
@@ -1206,13 +1227,13 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
               </button>
             </div>
           </div>
-        </Panel>
+        </SplitPanePanel>
         )}
 
-        {!focusMode && <Separator className="w-1 bg-ink-900/10 hover:bg-accent/50 transition-colors" />}
+        {!focusMode && <SplitPaneDivider orientation="horizontal" />}
 
         {/* Center: Chat Panel — fills the group when focusMode is on. */}
-        <Panel defaultSize={focusMode ? 100 : 50} minSize={focusMode ? 100 : 30} maxSize={100}>
+        <SplitPanePanel defaultSize={focusMode ? 100 : 50} minSize={focusMode ? 100 : 30} maxSize={100}>
           <div className="h-full flex flex-col bg-surface-cream relative overflow-hidden">
             <div
               ref={scrollContainerRef}
@@ -1256,36 +1277,38 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
                   </div>
                 )}
 
-                {visibleMessages.length === 0 && !isLoadingMessages ? (
-                  <div className="flex flex-col items-center justify-center py-20 text-center">
-                    <div className="text-lg font-medium text-ink-700">No messages yet</div>
-                    <p className="mt-2 text-sm text-muted">Start a conversation with {agent.name}</p>
-                  </div>
-                ) : (
-                  visibleMessages.map((item, idx) => (
+                <ToolStatusProvider>
+                  {visibleMessages.length === 0 && !isLoadingMessages ? (
+                    <div className="flex flex-col items-center justify-center py-20 text-center">
+                      <div className="text-lg font-medium text-ink-700">No messages yet</div>
+                      <p className="mt-2 text-sm text-muted">Start a conversation with {agent.name}</p>
+                    </div>
+                  ) : (
+                    visibleMessages.map((item, idx) => (
+                      <MessageCard
+                        key={`${activeConversationId}-msg-${item.originalIndex}`}
+                        message={item.message}
+                        isLast={idx === visibleMessages.length - 1}
+                        isRunning={isRunning}
+                        permissionRequest={permissionRequests[0]}
+                        onPermissionResult={() => {}}
+                        assistantName={nickname || agent.name || 'Assistant'}
+                      />
+                    ))
+                  )}
+
+                  {pendingUserMessage && (
                     <MessageCard
-                      key={`${activeConversationId}-msg-${item.originalIndex}`}
-                      message={item.message}
-                      isLast={idx === visibleMessages.length - 1}
-                      isRunning={isRunning}
-                      permissionRequest={permissionRequests[0]}
+                      key={`${activeConversationId}-pending-user`}
+                      message={{ type: 'user_prompt', prompt: pendingUserMessage }}
+                      isLast={false}
+                      isRunning={false}
+                      permissionRequest={undefined}
                       onPermissionResult={() => {}}
                       assistantName={nickname || agent.name || 'Assistant'}
                     />
-                  ))
-                )}
-
-                {pendingUserMessage && (
-                  <MessageCard
-                    key={`${activeConversationId}-pending-user`}
-                    message={{ type: 'user_prompt', prompt: pendingUserMessage }}
-                    isLast={false}
-                    isRunning={false}
-                    permissionRequest={undefined}
-                    onPermissionResult={() => {}}
-                    assistantName={nickname || agent.name || 'Assistant'}
-                  />
-                )}
+                  )}
+                </ToolStatusProvider>
 
                 {partialMessage && (
                   <div className="partial-message mt-4">
@@ -1381,17 +1404,17 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
               </button>
             )}
           </div>
-        </Panel>
+        </SplitPanePanel>
 
-        {!focusMode && <Separator className="w-1 bg-ink-900/10 hover:bg-accent/50 transition-colors" />}
+        {!focusMode && <SplitPaneDivider orientation="horizontal" />}
 
         {/* Right: Memory Panel */}
         {!focusMode && (
-          <Panel defaultSize={25} minSize={15} maxSize={40}>
+          <SplitPanePanel defaultSize={25} minSize={15} maxSize={40}>
             <AgentMemoryPanel agentId={agentId} />
-          </Panel>
+          </SplitPanePanel>
         )}
-      </PanelGroup>
+      </SplitPaneGroup>
 
       <ConfirmDialog
         open={showDeleteConfirm}

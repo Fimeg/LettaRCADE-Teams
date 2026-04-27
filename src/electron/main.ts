@@ -43,13 +43,11 @@ try {
 import { getPreloadPath, getUIPath, getIconPath } from "./pathResolver.js";
 import { getStaticData, pollResources, stopPolling } from "./test.js";
 import { handleClientEvent, cleanupAllSessions } from "./ipc-handlers.js";
-import { startProxyServer, type ProxyHandle } from "./proxy-server.js";
 import { LettaCodeManager, type LettaCodeStatusPayload } from "./letta-code-manager.js";
 
 let cleanupComplete = false;
 let mainWindow: BrowserWindow | null = null;
 let appConfig: Config;
-let proxyHandle: ProxyHandle | null = null;
 const lettaCode = new LettaCodeManager();
 
 // IPC validation helper
@@ -100,7 +98,6 @@ function cleanup(): void {
     cleanupAllSessions();
     // Fire-and-forget; Electron is tearing down anyway
     lettaCode.stop().catch(() => {});
-    proxyHandle?.stop().catch(() => {});
     closeDatabase();
     killViteDevServer();
 }
@@ -167,7 +164,8 @@ app.on("ready", () => {
                 'Content-Security-Policy': [
                     "default-src 'self'; " +
                     "connect-src 'self' http://* http://*:* https://* https://*:* ws://* wss://* http://10.10.20.19:* https://10.10.20.19:*; " +
-                    "script-src 'self' 'unsafe-inline'; " +
+                    "script-src 'self' 'unsafe-inline' blob:; " +
+                    "worker-src 'self' blob:; " +
                     "style-src 'self' 'unsafe-inline'"
                 ]
             }
@@ -262,19 +260,6 @@ app.on("ready", () => {
         return result.filePaths[0];
     });
 
-    // Start local proxy server for letta-code subprocess
-    startProxyServer(
-        appConfig.serverUrl || process.env.LETTA_BASE_URL || "http://localhost:8283",
-        appConfig.apiKey || process.env.LETTA_API_KEY || "",
-    )
-        .then((handle) => {
-            proxyHandle = handle;
-            console.log(`[proxy] listening on 127.0.0.1:${handle.port}`);
-        })
-        .catch((err) => {
-            console.error("[proxy] failed to start:", err);
-        });
-
     // Broadcast letta-code status changes to renderer
     lettaCode.on("status", (payload: LettaCodeStatusPayload) => {
         mainWindow?.webContents.send("letta-code:status", payload);
@@ -283,31 +268,58 @@ app.on("ready", () => {
         mainWindow?.webContents.send("letta-code:log", entry);
     });
 
-    ipcMain.handle("letta-code:get-status", () => {
+    // Helper to detect localhost/private URLs (used for smart config save logic)
+    function isLocalhostUrl(url: string): boolean {
+        try {
+            const parsed = new URL(url);
+            const hostname = parsed.hostname;
+            return hostname === 'localhost' ||
+                   hostname === '127.0.0.1' ||
+                   hostname === '::1' ||
+                   hostname.startsWith('192.168.') ||
+                   hostname.startsWith('10.') ||
+                   /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(hostname) ||
+                   hostname.endsWith('.local');
+        } catch {
+            return false;
+        }
+    }
+
+    ipcMainHandle("letta-code:get-status", () => {
         console.log("[ipc:letta-code:get-status] current status:", lettaCode.getStatus());
         return lettaCode.getStatus();
     });
 
-    ipcMain.handle("letta-code:spawn", async (_event, opts: { cwd?: string; serverUrl?: string; apiKey?: string; agentId?: string; agentMetadataEnv?: { letta_memfs_git_url?: string; letta_memfs_local?: string } } = {}) => {
+    ipcMainHandle("letta-code:spawn", async (_event, opts: { cwd?: string; serverUrl?: string; apiKey?: string; agentId?: string; agentMetadataEnv?: { letta_memfs_git_url?: string; letta_memfs_local?: string } } = {}) => {
         console.log("[ipc:letta-code:spawn] Spawn requested with opts:", { ...opts, apiKey: opts.apiKey ? "(set)" : "(unset)" });
-        console.log("[ipc:letta-code:spawn] proxyHandle:", proxyHandle ? `port=${proxyHandle.port}` : "null");
 
-        if (!proxyHandle) {
-            const errMsg = "proxy server not ready yet";
-            console.error(`[ipc:letta-code:spawn] ${errMsg}`);
-            throw new Error(errMsg);
-        }
         // Renderer-supplied creds win — they reflect what the user actually
         // configured in the Settings panel (localStorage). Fall back to the
         // main-process appConfig file only when the renderer didn't pass any.
         const upstreamUrl = opts.serverUrl || appConfig.serverUrl || "http://localhost:8283";
         const upstreamKey = opts.apiKey ?? appConfig.apiKey ?? "";
-        if (opts.serverUrl || opts.apiKey) {
-            // Persist so subsequent spawns / restarts have it.
-            appConfig = { ...appConfig, serverUrl: upstreamUrl, apiKey: upstreamKey };
-            saveConfig(appConfig);
+
+        // Only save config when the user explicitly changed settings (not for Local mode defaults)
+        // This preserves external server config when temporarily switching to Local mode
+        const explicitServerChange = opts.serverUrl && opts.serverUrl !== appConfig.serverUrl;
+        const explicitKeyChange = opts.apiKey !== undefined && opts.apiKey !== appConfig.apiKey;
+
+        if (explicitServerChange || explicitKeyChange) {
+            // Save config when:
+            // 1. Switching TO an external URL (preserve the new external config)
+            // 2. Switching FROM localhost TO localhost (user managing local servers)
+            // Don't save when switching FROM external TO localhost (temporary Local mode)
+            const targetIsExternal = !isLocalhostUrl(upstreamUrl);
+            const sourceWasExternal = !isLocalhostUrl(appConfig.serverUrl || "");
+
+            if (targetIsExternal || !sourceWasExternal) {
+                appConfig = { ...appConfig, serverUrl: upstreamUrl, apiKey: upstreamKey };
+                saveConfig(appConfig);
+                console.log("[ipc:letta-code:spawn] Saved config:", upstreamUrl);
+            } else {
+                console.log("[ipc:letta-code:spawn] Skipped config save - preserving external server settings for Local mode");
+            }
         }
-        proxyHandle.setUpstream(upstreamUrl, upstreamKey);
 
         // Resolve memfs env: per-agent metadata override > operator profile
         // template (with `{agentId}` substituted, token prefixed from keychain).
@@ -339,17 +351,24 @@ app.on("ready", () => {
             // the persistent-cache-with-sync pattern. See start-sam.sh etc.
             extraEnv.LETTA_MEMFS_LOCAL = "1";
         }
+        // PR #1918: letta-code keys memfs settings by the server URL. In
+        // 3-mode architecture, Local mode may use localhost:8283 while Server
+        // mode uses the external server. LETTA_MEMFS_BASE_URL ensures memfs
+        // routing uses the correct origin for the active mode.
+        extraEnv.LETTA_MEMFS_BASE_URL = upstreamUrl;
+
         console.log("[ipc:letta-code:spawn] resolved env:", {
             LETTA_MEMFS_GIT_URL: extraEnv.LETTA_MEMFS_GIT_URL ? "(set)" : "(unset)",
             LETTA_MEMFS_LOCAL: extraEnv.LETTA_MEMFS_LOCAL ?? "(unset)",
+            LETTA_MEMFS_BASE_URL: extraEnv.LETTA_MEMFS_BASE_URL ?? "(unset)",
             source: overrideUrl ? "agent-metadata" : profile?.memfsGitUrlTemplate ? "operator-template" : "none",
             tokenSet: hasMemfsToken(),
         });
 
         try {
             await lettaCode.spawn({
-                proxyPort: proxyHandle.port,
-                sessionToken: proxyHandle.sessionToken,
+                serverUrl: upstreamUrl,
+                apiKey: upstreamKey,
                 cwd: opts.cwd,
                 extraEnv,
             });
@@ -363,11 +382,37 @@ app.on("ready", () => {
         }
     });
 
-    ipcMain.handle("letta-code:stop", async () => {
+    ipcMainHandle("letta-code:stop", async () => {
         console.log("[ipc:letta-code:stop] Stop requested");
         await lettaCode.stop();
         const status = lettaCode.getStatus();
         console.log("[ipc:letta-code:stop] Status after stop:", status);
         return status;
+    });
+
+    // Health check for 3-mode architecture — verifies server connectivity
+    // before attempting Local mode spawn or when switching modes
+    ipcMainHandle("letta:health-check", async (_event, url: string, apiKey?: string) => {
+        console.log("[ipc:letta:health-check] Checking health for:", url);
+        try {
+            const headers: Record<string, string> = {};
+            if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+
+            const response = await fetch(`${url.replace(/\/$/, "")}/v1/agents/?limit=1`, {
+                method: "GET",
+                headers,
+            });
+
+            if (response.ok) {
+                console.log("[ipc:letta:health-check] Healthy:", url);
+                return { healthy: true };
+            }
+            console.log("[ipc:letta:health-check] Unhealthy:", response.status);
+            return { healthy: false, error: `Server returned ${response.status}` };
+        } catch (err) {
+            const errorMsg = err instanceof Error ? err.message : String(err);
+            console.log("[ipc:letta:health-check] Error:", errorMsg);
+            return { healthy: false, error: errorMsg };
+        }
     });
 })

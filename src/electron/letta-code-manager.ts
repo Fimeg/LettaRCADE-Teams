@@ -9,9 +9,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * Spawns and supervises the @letta-ai/letta-code CLI as an Electron
- * subprocess. The CLI thinks it is talking to Letta Cloud; in reality its
- * LETTA_BASE_URL points at the local proxy, which forwards to the configured
- * upstream (self-hosted server or cloud).
+ * subprocess. The CLI talks directly to the Letta server — no proxy.
+ * Self-hosted servers are handled gracefully by the CLI (404 detection
+ * on cloud-only endpoints, stub WebSocket, isCloudUser() gates).
+ *
+ * Three connection modes drive what serverUrl/apiKey are passed:
+ * - Server: REST API only, no CLI spawn needed
+ * - Local: CLI on this machine, serverUrl from app config
+ * - Remote: CLI connecting to a remote node, serverUrl from user input
  */
 
 export type LettaCodeStatus =
@@ -30,8 +35,10 @@ export interface LettaCodeStatusPayload {
 }
 
 interface SpawnOptions {
-  proxyPort: number;
-  sessionToken: string;
+  /** The real Letta server URL the CLI should talk to directly. */
+  serverUrl: string;
+  /** API key for the upstream server. Empty string for local dev servers. */
+  apiKey: string;
   cwd?: string;
   /** Extra env vars layered onto the spawn child. Caller is responsible for
    *  resolving operator-profile templates, decrypting tokens from the
@@ -109,17 +116,14 @@ export class LettaCodeManager extends EventEmitter {
     this.lastError = undefined;
     this.setState("starting");
 
-    // Log spawn configuration for debugging
     const spawnEnv: Record<string, string | undefined> = {
       ...process.env,
       ELECTRON_RUN_AS_NODE: "1",
-      LETTA_BASE_URL: `http://127.0.0.1:${opts.proxyPort}`,
-      LETTA_API_KEY: opts.sessionToken,
-      // Keep the CLI from trying to open a TTY; it should run headless.
+      LETTA_BASE_URL: opts.serverUrl,
+      LETTA_API_KEY: opts.apiKey || undefined,
       CI: "1",
     };
-    // Layer caller-provided env on top of process.env. `undefined` values are
-    // skipped so we don't shadow inherited vars with missing overrides.
+    // Layer caller-provided env on top of process.env.
     if (opts.extraEnv) {
       for (const [key, value] of Object.entries(opts.extraEnv)) {
         if (value !== undefined) spawnEnv[key] = value;
@@ -131,10 +135,9 @@ export class LettaCodeManager extends EventEmitter {
     console.log(`[letta-code]   cliPath: ${cliPath}`);
     console.log(`[letta-code]   cwd: ${opts.cwd ?? process.cwd()}`);
     console.log(`[letta-code]   LETTA_BASE_URL: ${spawnEnv.LETTA_BASE_URL}`);
+    console.log(`[letta-code]   LETTA_API_KEY: ${spawnEnv.LETTA_API_KEY ? "(set)" : "(unset)"}`);
     console.log(`[letta-code]   ELECTRON_RUN_AS_NODE: ${spawnEnv.ELECTRON_RUN_AS_NODE}`);
     console.log(`[letta-code]   CI: ${spawnEnv.CI}`);
-    console.log(`[letta-code]   LETTA_MEMFS_GIT_URL: ${process.env.LETTA_MEMFS_GIT_URL ?? "(unset)"}`);
-    console.log(`[letta-code]   LETTA_MEMFS_GIT_TOKEN: ${process.env.LETTA_MEMFS_GIT_TOKEN ? "(set)" : "(unset)"}`);
 
     const child = spawn(process.execPath, [cliPath], {
       cwd: opts.cwd ?? process.cwd(),

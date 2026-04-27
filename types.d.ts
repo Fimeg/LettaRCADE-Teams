@@ -63,6 +63,10 @@ type EventPayloadMapping = {
     "operator-secrets:set-memfs-token": boolean;
     "operator-secrets:has-memfs-token": boolean;
     "operator-secrets:clear-memfs-token": boolean;
+    "letta-code:get-status": LettaCodeStatusPayload;
+    "letta-code:spawn": LettaCodeStatusPayload;
+    "letta-code:stop": LettaCodeStatusPayload;
+    "letta:health-check": HealthCheckResult;
 }
 
 type LettaCodeStatus = "stopped" | "starting" | "running" | "stopping" | "crashed";
@@ -72,6 +76,11 @@ type LettaCodeStatusPayload = {
     pid?: number;
     exitCode?: number | null;
     exitSignal?: string | null;
+    error?: string;
+}
+
+type HealthCheckResult = {
+    healthy: boolean;
     error?: string;
 }
 

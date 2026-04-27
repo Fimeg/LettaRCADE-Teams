@@ -4,7 +4,28 @@ import { useCallback, useEffect, useState } from "react";
  * Renderer-side handle for the letta-code subprocess managed by the main
  * process. In a browser-only build (no Electron), returns a permanently
  * "unavailable" status so the UI can gracefully hide local-mode affordances.
+ *
+ * 3-Mode Architecture:
+ * - Server: Direct HTTP to external Letta server (no spawn)
+ * - Local: Spawn letta.js CLI, connect to localhost:8283
+ * - Remote: Direct HTTP to user-configured remote server (no spawn)
+ *
+ * Only Local mode uses this hook to spawn the CLI. Server and Remote modes
+ * use getLettaClient() directly with the appropriate baseURL.
  */
+
+export interface SpawnOptions {
+  cwd?: string;
+  agentId?: string;
+  agentMetadataEnv?: {
+    letta_memfs_git_url?: string;
+    letta_memfs_local?: string;
+  };
+  /** The Letta server URL to connect to. Required for 3-mode architecture. */
+  serverUrl?: string;
+  /** API key for the Letta server. */
+  apiKey?: string;
+}
 
 export function useLettaCodeSpawn() {
   const api = typeof window !== "undefined" ? window.electron?.lettaCode : undefined;
@@ -38,23 +59,35 @@ export function useLettaCodeSpawn() {
   }, [api]);
 
   const spawn = useCallback(
-    async (opts?: { cwd?: string; agentId?: string; agentMetadataEnv?: { letta_memfs_git_url?: string; letta_memfs_local?: string } }) => {
+    async (opts?: SpawnOptions) => {
       if (!api) {
         const errMsg = "letta-code is only available in the desktop app";
         console.error(`[useLettaCodeSpawn] ${errMsg}`);
         throw new Error(errMsg);
       }
-      // Renderer's working creds live in localStorage; main-process appConfig
-      // never sees them. Pass them through on spawn so the proxy upstream
-      // matches what the user actually configured in Settings.
-      let serverUrl: string | undefined;
-      let apiKey: string | undefined;
-      try {
-        serverUrl = localStorage.getItem("letta_api_url") || undefined;
-        apiKey = localStorage.getItem("letta_api_key") || undefined;
-      } catch { /* ignore privacy / quota errors */ }
+
+      // For 3-mode architecture, caller explicitly provides serverUrl.
+      // Fallback to localStorage only if not provided (backward compat).
+      let serverUrl = opts?.serverUrl;
+      let apiKey = opts?.apiKey;
+
+      if (!serverUrl) {
+        try {
+          serverUrl = localStorage.getItem("letta_api_url") || undefined;
+        } catch { /* ignore privacy / quota errors */ }
+      }
+      if (!apiKey) {
+        try {
+          apiKey = localStorage.getItem("letta_api_key") || undefined;
+        } catch { /* ignore privacy / quota errors */ }
+      }
+
       const fullOpts = { ...opts, serverUrl, apiKey };
-      console.log("[useLettaCodeSpawn] Calling api.spawn with opts:", { ...fullOpts, apiKey: apiKey ? "(set)" : "(unset)" });
+      console.log("[useLettaCodeSpawn] Calling api.spawn with opts:", {
+        ...fullOpts,
+        apiKey: apiKey ? "(set)" : "(unset)",
+      });
+
       try {
         const result = await api.spawn(fullOpts);
         console.log("[useLettaCodeSpawn] api.spawn succeeded:", result);
