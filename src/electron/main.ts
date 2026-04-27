@@ -15,7 +15,11 @@ import { initDatabase, closeDatabase, saveSession, getAllSessions, deleteSession
 import type { ClientEvent, ServerEvent } from "./types.js";
 
 // Load .env file from project root
-dotenvConfig({ path: join(process.cwd(), ".env") });
+const envResult = dotenvConfig({ path: join(process.cwd(), ".env") });
+console.log("[main] .env loaded:", envResult.parsed ? "yes" : "no");
+if (envResult.parsed) {
+  console.log("[main] .env keys:", Object.keys(envResult.parsed).join(", "));
+}
 
 // Default to Letta Cloud if no base URL set
 if (!process.env.LETTA_BASE_URL) {
@@ -27,18 +31,37 @@ if (!process.env.LETTA_API_KEY && process.env.LETTA_BASE_URL?.includes("localhos
   process.env.LETTA_API_KEY = "local-dev-key";
 }
 
-// Find letta CLI
-try {
-  const whichCmd = process.platform === 'win32' ? 'where letta' : 'which letta';
-  const lettaPath = execSync(whichCmd, { encoding: "utf-8" }).trim();
-  if (lettaPath) {
-    // On Windows, 'where' may return multiple lines - take the first one
-    const firstPath = lettaPath.split('\n')[0].trim();
-    process.env.LETTA_CLI_PATH = firstPath;
-    console.log("Found letta CLI at:", firstPath);
+// Set memfs token from environment if provided (and not already set)
+if (process.env.LETTA_MEMFS_GIT_TOKEN && !hasMemfsToken()) {
+  const token = process.env.LETTA_MEMFS_GIT_TOKEN.trim();
+  if (token) {
+    setMemfsToken(token);
+    console.log("[main] Memfs token set from environment variable");
   }
-} catch (e) {
-  console.warn("Could not find letta CLI:", e);
+}
+
+// Find letta CLI via `which letta` as a fallback if LETTA_CODE_CLI_PATH is not set
+// Note: LETTA_CODE_CLI_PATH from .env takes precedence (set in letta-code-manager.ts)
+if (!process.env.LETTA_CODE_CLI_PATH) {
+  try {
+    const whichCmd = process.platform === 'win32' ? 'where letta' : 'which letta';
+    const lettaPath = execSync(whichCmd, { encoding: "utf-8" }).trim();
+    if (lettaPath) {
+      // On Windows, 'where' may return multiple lines - take the first one
+      const firstPath = lettaPath.split('\n')[0].trim();
+      process.env.LETTA_CODE_CLI_PATH = firstPath;
+      console.log("Found letta CLI via 'which letta':", firstPath);
+    }
+  } catch (e) {
+    console.warn("Could not find letta CLI via 'which letta':", e);
+  }
+}
+
+// Alias LETTA_CLI_PATH for the SDK's SubprocessTransport.findCli().
+// The SDK v0.1.14+ checks LETTA_CLI_PATH; we use LETTA_CODE_CLI_PATH
+// in our own code. Keep both in sync so the SDK finds our custom build.
+if (process.env.LETTA_CODE_CLI_PATH && !process.env.LETTA_CLI_PATH) {
+  process.env.LETTA_CLI_PATH = process.env.LETTA_CODE_CLI_PATH;
 }
 import { getPreloadPath, getUIPath, getIconPath } from "./pathResolver.js";
 import { getStaticData, pollResources, stopPolling } from "./test.js";
@@ -242,6 +265,7 @@ app.on("ready", () => {
         LETTA_CODE_CLI_PATH: process.env.LETTA_CODE_CLI_PATH,
         LETTA_MEMFS_LOCAL: process.env.LETTA_MEMFS_LOCAL,
         LETTA_MEMFS_GIT_URL: process.env.LETTA_MEMFS_GIT_URL,
+        LETTA_API_KEY: process.env.LETTA_API_KEY,  // Add API key for renderer
         apiKeySet: !!process.env.LETTA_API_KEY,
         memfsGitTokenSet: !!process.env.LETTA_MEMFS_GIT_TOKEN,
         cwd: process.cwd(),
@@ -298,6 +322,17 @@ app.on("ready", () => {
         // main-process appConfig file only when the renderer didn't pass any.
         const upstreamUrl = opts.serverUrl || appConfig.serverUrl || "http://localhost:8283";
         const upstreamKey = opts.apiKey ?? appConfig.apiKey ?? "";
+
+        // For Local mode: check if letta-code CLI is already running before spawning
+        // Note: We check the CLI process status, not the upstream server health
+        const isLocalhost = isLocalhostUrl(upstreamUrl);
+        if (isLocalhost) {
+            const currentStatus = lettaCode.getStatus();
+            if (currentStatus.status === "running" || currentStatus.status === "starting") {
+                console.log("[ipc:letta-code:spawn] CLI already running - returning current status");
+                return currentStatus;
+            }
+        }
 
         // Only save config when the user explicitly changed settings (not for Local mode defaults)
         // This preserves external server config when temporarily switching to Local mode

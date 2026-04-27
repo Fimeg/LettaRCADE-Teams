@@ -4,18 +4,16 @@ import {
   type Session as LettaSession,
   type SDKMessage,
   type CanUseToolResponse,
+  type CanUseToolCallback,
   type SendMessage,
   type MessageContentItem,
 } from "@letta-ai/letta-code-sdk";
-import type { ServerEvent } from "../types.js";
+import type { ServerEvent, SessionStatus } from "../types.js";
 import type { PendingPermission } from "./runtime-state.js";
 
 /**
  * Extract text content from SDK 0.1.14 message content.
- * Handles new format where content can be:
- * - string (direct text)
- * - { text: string } (text object)
- * - MessageContentItem[] (multimodal)
+ * Handles both string and MessageContentItem[] formats.
  */
 function extractContentText(content: unknown): string {
   if (typeof content === 'string') {
@@ -25,7 +23,6 @@ function extractContentText(content: unknown): string {
     return String((content as { text?: string }).text ?? '');
   }
   if (Array.isArray(content)) {
-    // Handle MessageContentItem[] - extract all text parts
     return content
       .map((item: MessageContentItem) => {
         if (typeof item === 'string') return item;
@@ -37,291 +34,162 @@ function extractContentText(content: unknown): string {
   return '';
 }
 
-// Simplified session type for runner
-export type RunnerSession = {
-  id: string;
-  title: string;
-  status: string;
-  cwd?: string;
-  pendingPermissions: Map<string, PendingPermission>;
-};
-
-export type RunnerOptions = {
-  prompt: string;
-  session: RunnerSession;
-  resumeConversationId?: string;
-  onEvent: (event: ServerEvent) => void;
-  onSessionUpdate?: (updates: { lettaConversationId?: string }) => void;
-};
-
-export type RunnerHandle = {
-  abort: () => void;
-};
-
 const DEFAULT_CWD = process.cwd();
-const DEBUG = process.env.DEBUG_RUNNER === "true";
-
-// Load polling interval from config (use default if not available)
-const POLLING_INTERVAL = (() => {
-  try {
-    // Dynamic import to avoid circular dependency issues
-    const config = require('../config.js');
-    return config.loadConfig().pollingInterval || 5000;
-  } catch {
-    return 5000;
-  }
-})();
-
-// Simple logger for runner
-const log = (msg: string, data?: Record<string, unknown>) => {
-  const timestamp = new Date().toISOString();
-  if (data) {
-    console.log(`[${timestamp}] [runner] ${msg}`, JSON.stringify(data, null, 2));
-  } else {
-    console.log(`[${timestamp}] [runner] ${msg}`);
-  }
-};
-
-// Debug-only logging (verbose)
-const debug = (msg: string, data?: Record<string, unknown>) => {
-  if (!DEBUG) return;
-  log(msg, data);
-};
-
-// Store active Letta sessions for abort handling
-let activeLettaSession: LettaSession | null = null;
-
-// Store agentId for reuse across conversations
-let cachedAgentId: string | null = null;
 
 /**
- * Convert a simple prompt string to SDK 0.1.14 SendMessage format.
- * SDK 0.1.14 SendMessage type: string | MessageContentItem[]
- * MessageContentItem: { type: "text", text: string } | { type: "image", ... }
+ * Manages persistent SDK Session instances keyed by conversation ID.
+ *
+ * The CLI subprocess is spawned on first session creation and stays alive
+ * across multiple turns (send/stream cycles).  Each conversation gets its
+ * own SDK Session, which maps to a letta-code CLI subprocess.
  */
-function toSendMessage(prompt: string): SendMessage {
-  // SDK 0.1.14 accepts both string and MessageContentItem[]
-  // Using the array format for consistency with multimodal support
-  return [{ type: "text", text: prompt }];
-}
+export class SessionManager {
+  private sessions = new Map<string, LettaSession>();
+  private onEvent: (event: ServerEvent) => void;
+  private canUseTool?: CanUseToolCallback;
+  private permissionMode: "bypassPermissions" | "default";
 
-export async function runLetta(options: RunnerOptions): Promise<RunnerHandle> {
-  const { prompt, session, resumeConversationId, onEvent, onSessionUpdate } = options;
+  constructor(options: {
+    onEvent: (event: ServerEvent) => void;
+    canUseTool?: CanUseToolCallback;
+    permissionMode?: "bypassPermissions" | "default";
+  }) {
+    this.onEvent = options.onEvent;
+    this.canUseTool = options.canUseTool;
+    this.permissionMode = options.permissionMode ?? "bypassPermissions";
+  }
 
-  debug("runLetta called", {
-    prompt: prompt.slice(0, 100) + (prompt.length > 100 ? "..." : ""),
-    sessionId: session.id,
-    resumeConversationId,
-    cachedAgentId,
-    cwd: session.cwd,
-  });
-
-  // Mutable sessionId - starts as session.id, updated when conversationId is available
-  let currentSessionId = session.id;
-
-  const sendMessage = (message: SDKMessage) => {
-    onEvent({
-      type: "stream.message",
-      payload: { sessionId: currentSessionId, message }
+  /** Create a new conversation session on the given (or default) agent. */
+  async create(agentId?: string): Promise<{ conversationId: string; agentId: string }> {
+    const session = createSession(agentId, {
+      permissionMode: this.permissionMode,
+      canUseTool: this.canUseTool,
+      cwd: DEFAULT_CWD,
+      includePartialMessages: true,
     });
-  };
 
-  const sendPermissionRequest = (toolUseId: string, toolName: string, input: unknown) => {
-    onEvent({
-      type: "permission.request",
-      payload: { sessionId: currentSessionId, toolUseId, toolName, input }
+    // The SDK auto-initialises on first send; we call it explicitly here so
+    // we can capture the conversationId before the UI sends messages.
+    const init = await session.initialize();
+    const conversationId = init.conversationId;
+
+    this.sessions.set(conversationId, session);
+
+    this.emitSessionStatus(conversationId, "running", { agentId: init.agentId });
+
+    return { conversationId, agentId: init.agentId };
+  }
+
+  /** Ensure a session exists for an already-known conversation. */
+  async ensure(conversationId: string): Promise<void> {
+    if (this.sessions.has(conversationId)) return;
+
+    const session = resumeSession(conversationId, {
+      permissionMode: this.permissionMode,
+      canUseTool: this.canUseTool,
+      cwd: DEFAULT_CWD,
+      includePartialMessages: true,
     });
-  };
 
-  // Start the query in the background
-  (async () => {
-    try {
-      // Common options for canUseTool
-      const canUseTool = async (toolName: string, input: unknown) => {
-        // For AskUserQuestion, we need to wait for user response
-        if (toolName === "AskUserQuestion") {
-          const toolUseId = crypto.randomUUID();
-          sendPermissionRequest(toolUseId, toolName, input);
-          return new Promise<CanUseToolResponse>((resolve) => {
-            session.pendingPermissions.set(toolUseId, {
-              toolUseId,
-              toolName,
-              input,
-              resolve: (result) => {
-                session.pendingPermissions.delete(toolUseId);
-                resolve(result);
-              }
-            });
-          });
-        }
-        return { behavior: "allow" as const };
-      };
+    // resumeSession doesn't need an explicit initialize — it auto-inits
+    // on the next send(). But we hold the reference so the session stays open.
+    this.sessions.set(conversationId, session);
+  }
 
-      // Session options - SDK 0.1.14 format
-      const sessionOptions = {
-        cwd: session.cwd ?? DEFAULT_CWD,
-        permissionMode: "bypassPermissions" as const,
-        canUseTool,
-      };
+  /** Send a message on an existing session and stream results via onEvent. */
+  async send(conversationId: string, prompt: string): Promise<void> {
+    const session = this.sessions.get(conversationId);
+    if (!session) {
+      throw new Error(`No session found for conversation: ${conversationId}`);
+    }
 
-      // Create or resume session
-      let lettaSession: LettaSession;
+    this.emitStreamUserPrompt(conversationId, prompt);
 
-      // Validate that resumeConversationId looks like a valid Letta ID
-      // Valid IDs are: agent-xxx, conv-xxx, conversation-xxx, or UUIDs
-      const isValidLettaId = (id: string | undefined): boolean => {
-        if (!id) return false;
-        // Check for known prefixes or UUID format
-        return /^(agent-|conv-|conversation-|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/.test(id);
-      };
+    // Convert to SDK SendMessage format
+    const msg: SendMessage = [{ type: "text", text: prompt }];
+    await session.send(msg);
 
-      if (resumeConversationId && isValidLettaId(resumeConversationId)) {
-        // Resume specific conversation
-        debug("creating session: resumeSession with conversationId", { resumeConversationId });
-        lettaSession = resumeSession(resumeConversationId, sessionOptions);
-      } else if (resumeConversationId && !isValidLettaId(resumeConversationId)) {
-        // Invalid ID provided - log warning and fall back to cachedAgentId
-        log("WARNING: invalid resumeConversationId, falling back", {
-          invalidId: resumeConversationId,
-          fallbackTo: cachedAgentId ? "cachedAgentId" : "createSession"
+    // Stream results
+    for await (const message of session.stream()) {
+      this.emitStreamMessage(conversationId, message);
+
+      if (message.type === "result") {
+        const status = message.success ? "completed" : "error";
+        this.emitSessionStatus(conversationId, status, {
+          error: message.error,
+          agentId: session.agentId ?? undefined,
         });
-        if (cachedAgentId) {
-          debug("creating session: resumeSession with cachedAgentId (fallback)", { cachedAgentId });
-          lettaSession = resumeSession(cachedAgentId, sessionOptions);
-        } else {
-          debug("creating session: createSession (new agent, fallback)");
-          lettaSession = createSession(undefined, sessionOptions);
-        }
-      } else if (cachedAgentId) {
-        // Create new conversation on existing agent
-        debug("creating session: resumeSession with cachedAgentId", { cachedAgentId });
-        lettaSession = resumeSession(cachedAgentId, sessionOptions);
-      } else {
-        // First time - create new agent and session
-        debug("creating session: createSession (new agent)");
-        lettaSession = createSession(undefined, sessionOptions);
-      }
-      debug("session created successfully");
-
-      // Store for abort handling
-      activeLettaSession = lettaSession;
-
-      // Send the prompt using new SDK 0.1.14 SendMessage format
-      const sendMessagePayload = toSendMessage(prompt);
-      debug("calling send() with SendMessage format", {
-        type: typeof sendMessagePayload === "string" ? "string" : "array"
-      });
-      await lettaSession.send(sendMessagePayload);
-      debug("send() completed", {
-        conversationId: lettaSession.conversationId,
-        agentId: lettaSession.agentId,
-      });
-
-      // Now initialized - update sessionId and cache agentId
-      if (lettaSession.conversationId) {
-        currentSessionId = lettaSession.conversationId;
-        debug("session initialized", { conversationId: lettaSession.conversationId, agentId: lettaSession.agentId });
-        onSessionUpdate?.({ lettaConversationId: lettaSession.conversationId });
-
-        // Emit session.status with agentId for SDK 0.1.14+ compatibility
-        onEvent({
-          type: "session.status",
-          payload: {
-            sessionId: currentSessionId,
-            status: "running",
-            title: currentSessionId,
-            agentId: lettaSession.agentId ?? undefined,
-          }
-        });
-      } else {
-        log("WARNING: no conversationId available after send()");
-      }
-
-      // Cache agentId for future conversations
-      if (lettaSession.agentId && !cachedAgentId) {
-        cachedAgentId = lettaSession.agentId;
-        debug("cached agentId for future conversations", { agentId: cachedAgentId });
-      }
-
-      // Stream messages - SDK 0.1.14 pattern
-      // The stream yields SDKMessage objects with content in the new format
-      debug("starting stream");
-      let messageCount = 0;
-      for await (const message of lettaSession.stream()) {
-        messageCount++;
-
-        // Debug log with content preview (if available)
-        const contentPreview = 'content' in message
-          ? extractContentText((message as { content?: unknown }).content).slice(0, 50)
-          : '';
-        debug("received message", {
-          type: message.type,
-          count: messageCount,
-          contentPreview: contentPreview || undefined,
-          hasAgentId: 'agentId' in message ? !!(message as { agentId?: string }).agentId : undefined,
-        });
-
-        // Send message directly to frontend
-        // SDK 0.1.14 messages use `content` field (not `value`)
-        sendMessage(message);
-
-        // Check for result to update session status
-        if (message.type === "result") {
-          const status = message.success ? "completed" : "error";
-          debug("result received", { success: message.success, status });
-          onEvent({
-            type: "session.status",
-            payload: {
-              sessionId: currentSessionId,
-              status,
-              title: currentSessionId,
-              agentId: lettaSession.agentId ?? undefined,
-            }
-          });
-        }
-      }
-      debug("stream ended", { totalMessages: messageCount });
-
-      // Query completed normally
-      if (session.status === "running") {
-        debug("query completed normally");
-        onEvent({
-          type: "session.status",
-          payload: { sessionId: currentSessionId, status: "completed", title: currentSessionId }
-        });
-      }
-    } catch (error) {
-      if ((error as Error).name === "AbortError") {
-        // Session was aborted, don't treat as error
-        debug("session aborted");
         return;
       }
-      log("ERROR in runLetta", {
-        error: String(error),
-        name: (error as Error).name,
-        stack: (error as Error).stack
-      });
-      onEvent({
-        type: "session.status",
-        payload: {
-          sessionId: currentSessionId,
-          status: "error",
-          title: currentSessionId,
-          error: String(error),
-          agentId: cachedAgentId || undefined,
-        }
-      });
-    } finally {
-      debug("runLetta finally block, clearing activeLettaSession");
-      activeLettaSession = null;
     }
-  })();
 
-  return {
-    abort: async () => {
-      if (activeLettaSession) {
-        await activeLettaSession.abort();
-      }
+    // Stream ended without a result message — likely interrupted
+    this.emitSessionStatus(conversationId, "completed", {
+      agentId: session.agentId ?? undefined,
+    });
+  }
+
+  /** Abort the current turn without closing the session. */
+  async abort(conversationId: string): Promise<void> {
+    const session = this.sessions.get(conversationId);
+    if (!session) return;
+
+    await session.abort();
+    this.emitSessionStatus(conversationId, "idle");
+  }
+
+  /** Close and remove a session. */
+  async close(conversationId: string): Promise<void> {
+    const session = this.sessions.get(conversationId);
+    if (!session) return;
+
+    session.close();
+    this.sessions.delete(conversationId);
+    this.emit({ type: "session.deleted", payload: { sessionId: conversationId } });
+  }
+
+  /** Close every tracked session. */
+  closeAll(): void {
+    for (const [id, session] of this.sessions) {
+      session.close();
     }
-  };
+    this.sessions.clear();
+  }
+
+  // ── helpers ──────────────────────────────────────────────────────────────
+
+  private emit(event: ServerEvent): void {
+    this.onEvent(event);
+  }
+
+  private emitSessionStatus(
+    conversationId: string,
+    status: SessionStatus,
+    extras?: { agentId?: string; error?: string },
+  ): void {
+    this.emit({
+      type: "session.status",
+      payload: {
+        sessionId: conversationId,
+        status,
+        title: conversationId,
+        ...(extras?.agentId ? { agentId: extras.agentId } : {}),
+        ...(extras?.error ? { error: extras.error } : {}),
+      },
+    });
+  }
+
+  private emitStreamUserPrompt(conversationId: string, prompt: string): void {
+    this.emit({
+      type: "stream.user_prompt",
+      payload: { sessionId: conversationId, prompt },
+    });
+  }
+
+  private emitStreamMessage(conversationId: string, message: SDKMessage): void {
+    this.emit({
+      type: "stream.message",
+      payload: { sessionId: conversationId, message },
+    });
+  }
 }
