@@ -19,12 +19,54 @@
 import { Letta } from "@letta-ai/letta-client";
 
 // =============================================================================
-// Client Initialization
+// Client Initialization (3-Mode Architecture)
 // =============================================================================
+// Server: Direct HTTP to external Letta server (configured URL)
+// Local: Spawn binary, connect to localhost:8283
+// Remote: Direct HTTP to user-provided remote URL
 
 let clientInstance: Letta | null = null;
 
+export type ConnectionMode = 'server' | 'local' | 'remote';
+
+export function getConnectionMode(): ConnectionMode {
+  if (typeof window === 'undefined') return 'server';
+  const mode = localStorage.getItem('letta_connection_mode') as ConnectionMode | null;
+  return mode || 'server';
+}
+
+export function setConnectionMode(mode: ConnectionMode, remoteUrl?: string): void {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem('letta_connection_mode', mode);
+  if (mode === 'remote' && remoteUrl) {
+    localStorage.setItem('letta_remote_url', remoteUrl);
+  }
+  // Reset client so next call uses new mode
+  resetClient();
+}
+
+export function getRemoteUrl(): string {
+  if (typeof window === 'undefined') return '';
+  return localStorage.getItem('letta_remote_url') || '';
+}
+
 export function getApiBase(): string {
+  const mode = getConnectionMode();
+
+  // Local mode: always localhost
+  if (mode === 'local') {
+    return 'http://localhost:8283';
+  }
+
+  // Remote mode: user-provided URL
+  if (mode === 'remote') {
+    const remoteUrl = getRemoteUrl();
+    if (remoteUrl) return remoteUrl;
+    // Fallback if no remote URL set
+    return 'http://localhost:8283';
+  }
+
+  // Server mode: configured server URL
   if (typeof window !== 'undefined') {
     const saved = localStorage.getItem('letta_api_url');
     if (saved) return saved;

@@ -1,8 +1,8 @@
 import electron from "electron";
 
 electron.contextBridge.exposeInMainWorld("electron", {
-    subscribeStatistics: (callback) =>
-        ipcOn("statistics", stats => {
+    subscribeStatistics: (callback: (stats: { cpuUsage: number; ramUsage: number; storageData: number }) => void) =>
+        ipcOn("statistics", (stats: { cpuUsage: number; ramUsage: number; storageData: number }) => {
             callback(stats);
         }),
     getStaticData: () => ipcInvoke("getStaticData"),
@@ -68,7 +68,12 @@ electron.contextBridge.exposeInMainWorld("electron", {
             return () => electron.ipcRenderer.off("letta-code:log", cb);
         },
     },
-} satisfies Window['electron'])
+
+    // 3-mode connection health check
+    letta: {
+        healthCheck: (url: string, apiKey?: string) => electron.ipcRenderer.invoke("letta:health-check", url, apiKey),
+    },
+} as const)
 
 function ipcInvoke<Key extends keyof EventPayloadMapping>(key: Key, ...args: any[]): Promise<EventPayloadMapping[Key]> {
     return electron.ipcRenderer.invoke(key, ...args);

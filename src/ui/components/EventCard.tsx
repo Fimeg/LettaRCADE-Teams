@@ -13,10 +13,8 @@ import type { PermissionRequest } from "../store/useAppStore";
 import { extractBlockText } from "../store/useAppStore";
 import MDContent from "../render/markdown";
 import { DecisionPanel } from "./DecisionPanel";
+import { useToolStatus, useSetToolStatus } from "../contexts";
 
-type ToolStatus = "pending" | "success" | "error";
-const toolStatusMap = new Map<string, ToolStatus>();
-const toolStatusListeners = new Set<() => void>();
 const MAX_VISIBLE_LINES = 3;
 
 type AskUserQuestionInput = {
@@ -34,25 +32,6 @@ const getAskUserQuestionSignature = (input?: AskUserQuestionInput | null) => {
     const options = (question.options ?? []).map((o) => `${o.label}|${o.description ?? ""}`).join(",");
     return `${question.question}|${question.header ?? ""}|${question.multiSelect ? "1" : "0"}|${options}`;
   }).join("||");
-};
-
-const setToolStatus = (toolCallId: string | undefined, status: ToolStatus) => {
-  if (!toolCallId) return;
-  toolStatusMap.set(toolCallId, status);
-  toolStatusListeners.forEach((listener) => listener());
-};
-
-const useToolStatus = (toolCallId: string | undefined) => {
-  const [status, setStatus] = useState<ToolStatus | undefined>(() =>
-    toolCallId ? toolStatusMap.get(toolCallId) : undefined
-  );
-  useEffect(() => {
-    if (!toolCallId) return;
-    const handleUpdate = () => setStatus(toolStatusMap.get(toolCallId));
-    toolStatusListeners.add(handleUpdate);
-    return () => { toolStatusListeners.delete(handleUpdate); };
-  }, [toolCallId]);
-  return status;
 };
 
 const StatusDot = ({ variant = "accent", isActive = false, isVisible = true }: {
@@ -86,6 +65,7 @@ const ToolResultCard = ({ message }: { message: SDKToolResultMessage }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const isFirstRender = useRef(true);
+  const setToolStatus = useSetToolStatus();
 
   const isError = message.isError;
   const contentText = extractBlockText(message.content);
@@ -101,7 +81,11 @@ const ToolResultCard = ({ message }: { message: SDKToolResultMessage }) => {
   const hasMoreLines = lines.length > MAX_VISIBLE_LINES;
   const visibleContent = hasMoreLines && !isExpanded ? lines.slice(0, MAX_VISIBLE_LINES).join("\n") : lines.join("\n");
 
-  useEffect(() => { setToolStatus(message.toolCallId, isError ? "error" : "success"); }, [message.toolCallId, isError]);
+  useEffect(() => {
+    if (message.toolCallId) {
+      setToolStatus(message.toolCallId, isError ? "error" : "success");
+    }
+  }, [message.toolCallId, isError, setToolStatus]);
   useEffect(() => {
     if (!hasMoreLines || isFirstRender.current) { isFirstRender.current = false; return; }
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -155,27 +139,28 @@ const ReasoningCard = ({ message, showIndicator = false }: { message: SDKReasoni
 };
 
 // Tool Call Card
-const ToolCallCard = ({ 
-  message, 
+const ToolCallCard = ({
+  message,
   showIndicator = false,
   permissionRequest,
   onPermissionResult
-}: { 
-  message: SDKToolCallMessage; 
+}: {
+  message: SDKToolCallMessage;
   showIndicator?: boolean;
   permissionRequest?: PermissionRequest;
   onPermissionResult?: (toolUseId: string, result: CanUseToolResponse) => void;
 }) => {
   const toolStatus = useToolStatus(message.toolCallId);
+  const setToolStatus = useSetToolStatus();
   const statusVariant = toolStatus === "error" ? "error" : "success";
   const isPending = !toolStatus || toolStatus === "pending";
   const shouldShowDot = toolStatus === "success" || toolStatus === "error" || showIndicator;
 
   useEffect(() => {
-    if (message.toolCallId && !toolStatusMap.has(message.toolCallId)) {
+    if (message.toolCallId) {
       setToolStatus(message.toolCallId, "pending");
     }
-  }, [message.toolCallId]);
+  }, [message.toolCallId, setToolStatus]);
 
   const getToolInfo = (): string | null => {
     const input = message.toolInput;
