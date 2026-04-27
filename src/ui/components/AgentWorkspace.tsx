@@ -80,7 +80,7 @@ interface ToolInfo {
   tags?: string[];
 }
 
-export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: AgentWorkspaceProps) {
+export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspaceProps) {
   // Store integration
   const agent = useAppStore((s) => s.agents[agentId]);
   const loadAgent = useAppStore((s) => s.loadAgent);
@@ -196,7 +196,8 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
   const prevMessagesLengthRef = useRef(0);
 
   // Connection mode (3-mode architecture: server / local / remote)
-  const [connectionMode, setConnectionMode] = useState<ConnectionMode>('server');
+  // Default to LOCAL mode - CLI will auto-spawn when agent loads
+  const [connectionMode, setConnectionMode] = useState<ConnectionMode>('local');
   const [remoteUrl, setRemoteUrl] = useState<string>('');
 
   // Focus mode: collapses the workspace down to just the chat stream — no
@@ -299,11 +300,37 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
     }
   }, [shouldAutoScroll]);
 
+  // Post-stream cleanup: shared between IPC and browser paths.
+  const completeStream = useCallback(() => {
+    setShowPartialMessage(false);
+    partialMessageRef.current = '';
+    setPartialMessage('');
+    setPendingUserMessage(null);
+    pendingIpcStreamRef.current = false;
+  }, []);
+
   // Event handler for IPC
   const onEvent = useCallback((event: ServerEvent) => {
     handleServerEvent(event);
     handlePartialMessages(event);
-  }, [handleServerEvent, handlePartialMessages]);
+
+    // When an IPC stream completes, refetch full history and clean up.
+    // This mirrors what the browser path does after `for await` finishes.
+    if (event.type === "session.status") {
+      if (event.payload.status === "running" && pendingIpcStreamRef.current) {
+        // First running event carries the conversationId from the SDK.
+        // Make sure AgentWorkspace tracks it so subsequent sends use
+        // session.continue instead of session.start.
+        const sid = event.payload.sessionId;
+        if (sid && !activeConversationId) {
+          setActiveConversationId(sid);
+        }
+      }
+      if (event.payload.status === "completed" && pendingIpcStreamRef.current) {
+        loadMessages(event.payload.sessionId).then(() => completeStream());
+      }
+    }
+  }, [handleServerEvent, handlePartialMessages, loadMessages, completeStream, activeConversationId, setActiveConversationId]);
 
   useIPC(onEvent);
 
@@ -690,12 +717,19 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
 
   // ═══ MESSAGE SENDING WITH STREAMING ═══
 
+  // Ref to track whether a stream is in-flight over IPC so the
+  // session.status:completed handler can trigger the post-stream refetch.
+  const pendingIpcStreamRef = useRef<boolean>(false);
+
   const handleInputSend = useCallback(async () => {
     if (!inputValue.trim() || isStreaming) return;
 
-    // Auto-create conversation if none exists
+    const isElectron = typeof window !== 'undefined' && window.electron;
+
+    // Auto-create conversation if none exists (browser path only — for
+    // Electron, the SDK session creates the conversation on first send).
     let conversationId = activeConversationId;
-    if (!conversationId) {
+    if (!conversationId && !isElectron) {
       try {
         const newConv = await createConversation(agentId);
         if (newConv) {
@@ -729,11 +763,36 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
     // the message stays invisible until after the stream completes and the
     // history refetch lands, then user + assistant snap in together.
     setPendingUserMessage(userMsg);
-
-    // Start streaming
     setShowPartialMessage(true);
     partialMessageRef.current = '';
     setPartialMessage('');
+
+    // ── Electron path: route through IPC → SDK Session → CLI subprocess ───
+    // The CLI handles tool execution (bash, read, write) natively. Messages
+    // arrive as stream.message IPC events rendered by handlePartialMessages.
+    if (isElectron) {
+      pendingIpcStreamRef.current = true;
+
+      // Don't pre-create the conversation — let the SDK session create it.
+      // When it does, the store's handleServerEvent picks up the new
+      // conversationId from session.status and sets activeSessionId.
+      if (!activeConversationId) {
+        sendEvent({
+          type: "session.start",
+          payload: { title: agentId, prompt: userMsg, agentId },
+        });
+      } else {
+        sendEvent({
+          type: "session.continue",
+          payload: { sessionId: conversationId!, prompt: userMsg },
+        });
+      }
+      return;
+    }
+
+    // ── Browser path: direct REST API (no tool execution) ─────────────────
+    pendingIpcStreamRef.current = false;
+    const convId = conversationId!; // guaranteed by the create logic above
 
     try {
       const stream = streamMessage(userMsg);
@@ -750,40 +809,30 @@ export function AgentWorkspace({ agentId, onBack, sendEvent: _sendEvent }: Agent
             }
             break;
           case 'reasoning':
-            // Reasoning messages handled by hook - refresh messages to include them
-            await loadMessages(conversationId);
+            await loadMessages(convId);
             break;
           case 'tool_call':
-            // Tool call messages handled by hook - refresh messages
-            await loadMessages(conversationId);
+            await loadMessages(convId);
             break;
           case 'tool_return':
-            // Tool return messages handled by hook - refresh messages
-            await loadMessages(conversationId);
+            await loadMessages(convId);
             break;
           case 'error':
-            // Error displayed in UI via toast or partial message
             partialMessageRef.current += `\n\nError: ${chunk.message}`;
             setPartialMessage(partialMessageRef.current);
             break;
         }
       }
 
-      // Refresh messages to get the final assistant message from the server
-      await loadMessages(conversationId);
+      await loadMessages(convId);
     } catch (err) {
       console.error('[AgentWorkspace] Stream error:', err);
       partialMessageRef.current += `\n\nStream error: ${err instanceof Error ? err.message : 'Unknown error'}`;
       setPartialMessage(partialMessageRef.current);
     } finally {
-      setShowPartialMessage(false);
-      partialMessageRef.current = '';
-      setPartialMessage('');
-      // Refetch (above) populated the real user message — drop the optimistic
-      // copy so we don't render it twice.
-      setPendingUserMessage(null);
+      completeStream();
     }
-  }, [inputValue, activeConversationId, isStreaming, handleSlashCommand, resetToLatest, shouldAutoScroll, agentId, createConversation, setActiveConversationId]);
+  }, [inputValue, activeConversationId, isStreaming, handleSlashCommand, resetToLatest, shouldAutoScroll, agentId, createConversation, setActiveConversationId, sendEvent]);
 
   const getModelDisplay = (model: string) => {
     if (!model) return "Unknown";
