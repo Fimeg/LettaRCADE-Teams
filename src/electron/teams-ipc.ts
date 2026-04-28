@@ -1,6 +1,6 @@
 import { ipcMainHandle } from "./util.js";
 import type { DispatchTaskInput, SpawnTeammateInput, TaskStatus } from "letta-teams-sdk";
-import type { TeamsConfigureInput, TeamsRuntimeManager } from "./teams-runtime.js";
+import type { TeamsConfigureInput, TeamsCouncilStartInput, TeamsRuntimeManager } from "./teams-runtime.js";
 
 export function registerTeamsIpc(teamsRuntime: TeamsRuntimeManager): void {
   ipcMainHandle("teams:configure", (_event, input: TeamsConfigureInput) => teamsRuntime.configure(input));
@@ -19,4 +19,8 @@ export function registerTeamsIpc(teamsRuntime: TeamsRuntimeManager): void {
   ipcMainHandle("teams:tasks:dispatch", (_event, input: DispatchTaskInput) => teamsRuntime.dispatchTask(input));
   ipcMainHandle("teams:tasks:wait", (_event, id: string) => teamsRuntime.waitForTask(id));
   ipcMainHandle("teams:tasks:cancel", (_event, id: string) => teamsRuntime.cancelTask(id));
+
+  ipcMainHandle("teams:councils:start", (_event, input: TeamsCouncilStartInput) => teamsRuntime.startCouncil(input));
+  ipcMainHandle("teams:councils:list", () => teamsRuntime.listCouncilSessions());
+  ipcMainHandle("teams:councils:get", (_event, sessionId: string) => teamsRuntime.getCouncilSession(sessionId));
 }

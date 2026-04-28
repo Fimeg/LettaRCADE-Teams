@@ -26,18 +26,25 @@ const followTokens = new Map<string, number>();
 
 export type TeamsSelectionType = 'task' | 'teammate' | null;
 export type TeamsTaskFilter = 'all' | 'active' | 'review' | 'completed' | 'failed';
+export type TeamsViewMode = 'monitor' | 'councils';
 
 type TeamsOperationState = {
   bootstrapping: boolean;
   refreshing: boolean;
+  councilRefreshing: boolean;
   ensuringDaemon: boolean;
   spawning: boolean;
   dispatching: boolean;
+  startingCouncil: boolean;
 };
 
 type RefreshOptions = {
   silent?: boolean;
   status?: TaskStatus;
+};
+
+type CouncilRefreshOptions = {
+  silent?: boolean;
 };
 
 type TeamsState = {
@@ -57,6 +64,10 @@ type TeamsState = {
   selectedTaskId: string | null;
   selectedTeammateName: string | null;
   taskFilter: TeamsTaskFilter;
+  teamsViewMode: TeamsViewMode;
+  councilSessions: TeamsCouncilSessionMeta[];
+  selectedCouncilSessionId: string | null;
+  selectedCouncilSessionDetail: TeamsCouncilSessionDetail | null;
   trackedTaskIds: string[];
   operations: TeamsOperationState;
   clearError: () => void;
@@ -69,9 +80,13 @@ type TeamsState = {
   ensureDaemonRunning: () => Promise<void>;
   startPolling: () => Promise<void>;
   stopPolling: () => void;
+  setTeamsViewMode: (mode: TeamsViewMode) => void;
   selectTeammate: (name: string) => void;
   selectTask: (id: string) => void;
   setTaskFilter: (filter: TeamsTaskFilter) => void;
+  refreshCouncils: (options?: CouncilRefreshOptions) => Promise<void>;
+  selectCouncilSession: (sessionId: string) => Promise<void>;
+  startCouncil: (input: TeamsCouncilStartInput) => Promise<{ sessionId: string }>;
   followTask: (id: string) => void;
   spawnTeammate: (input: SpawnTeammateInput) => Promise<TeammateState>;
   forkTeammate: (name: string, forkName: string) => Promise<TeammateState>;
@@ -83,9 +98,11 @@ type TeamsState = {
 const defaultOperations: TeamsOperationState = {
   bootstrapping: false,
   refreshing: false,
+  councilRefreshing: false,
   ensuringDaemon: false,
   spawning: false,
   dispatching: false,
+  startingCouncil: false,
 };
 
 function hasTeamsBridge(): boolean {
@@ -121,9 +138,17 @@ function getDefaultTask(tasks: TaskState[]): TaskState | undefined {
   return tasks.find((task) => ACTIVE_TASK_STATUSES.has(task.status)) ?? tasks[0];
 }
 
-function getDesiredPollInterval(state: Pick<TeamsState, 'tasks' | 'trackedTaskIds' | 'basePollIntervalMs'>): number {
+function hasRunningCouncilSession(sessions: TeamsCouncilSessionMeta[]): boolean {
+  return sessions.some((session) => session.status === 'running');
+}
+
+function getDesiredPollInterval(
+  state: Pick<TeamsState, 'tasks' | 'trackedTaskIds' | 'basePollIntervalMs' | 'teamsViewMode' | 'councilSessions'>,
+): number {
   const hasActiveTasks = state.tasks.some((task) => ACTIVE_TASK_STATUSES.has(task.status));
-  return hasActiveTasks || state.trackedTaskIds.length > 0
+  const hasActiveCouncil = state.teamsViewMode === 'councils' && hasRunningCouncilSession(state.councilSessions);
+
+  return hasActiveTasks || state.trackedTaskIds.length > 0 || hasActiveCouncil
     ? MIN_POLL_INTERVAL_MS
     : state.basePollIntervalMs;
 }
@@ -239,6 +264,9 @@ function scheduleNextPoll(
   const timer = window.setTimeout(async () => {
     try {
       await get().refresh({ silent: true });
+      if (get().teamsViewMode === 'councils') {
+        await get().refreshCouncils({ silent: true });
+      }
     } finally {
       scheduleNextPoll(set, get);
     }
@@ -344,6 +372,10 @@ export const useTeamsStore = create<TeamsState>((set, get) => ({
   selectedTaskId: null,
   selectedTeammateName: null,
   taskFilter: 'all',
+  teamsViewMode: 'monitor',
+  councilSessions: [],
+  selectedCouncilSessionId: null,
+  selectedCouncilSessionDetail: null,
   trackedTaskIds: [],
   operations: defaultOperations,
 
@@ -465,6 +497,8 @@ export const useTeamsStore = create<TeamsState>((set, get) => ({
           tasks: nextTasks,
           trackedTaskIds: selection.trackedTaskIds,
           basePollIntervalMs: currentState.basePollIntervalMs,
+          teamsViewMode: currentState.teamsViewMode,
+          councilSessions: currentState.councilSessions,
         }),
       });
     } catch (error) {
@@ -556,6 +590,23 @@ export const useTeamsStore = create<TeamsState>((set, get) => ({
     }));
   },
 
+  setTeamsViewMode: (mode) => {
+    set((state) => ({
+      teamsViewMode: mode,
+      pollIntervalMs: getDesiredPollInterval({
+        tasks: state.tasks,
+        trackedTaskIds: state.trackedTaskIds,
+        basePollIntervalMs: state.basePollIntervalMs,
+        teamsViewMode: mode,
+        councilSessions: state.councilSessions,
+      }),
+    }));
+
+    if (get().pollingEnabled) {
+      scheduleNextPoll(set, get);
+    }
+  },
+
   selectTeammate: (name) => {
     set({
       selectedEntityType: 'teammate',
@@ -575,6 +626,98 @@ export const useTeamsStore = create<TeamsState>((set, get) => ({
   },
 
   setTaskFilter: (filter) => set({ taskFilter: filter }),
+
+  refreshCouncils: async ({ silent = false }: CouncilRefreshOptions = {}) => {
+    if (!hasTeamsBridge()) {
+      set({ supported: false, bootstrapped: true });
+      return;
+    }
+
+    if (!silent) {
+      setOperation(set, 'councilRefreshing', true);
+    }
+
+    try {
+      await get().configure();
+      const sessions = await window.electron.teams.listCouncilSessions();
+      const currentSelectedId = get().selectedCouncilSessionId;
+      let nextSelectedId = currentSelectedId && sessions.some((session) => session.sessionId === currentSelectedId)
+        ? currentSelectedId
+        : sessions[0]?.sessionId ?? null;
+      let detail = nextSelectedId
+        ? await window.electron.teams.getCouncilSession(nextSelectedId)
+        : null;
+
+      if (nextSelectedId && !detail) {
+        nextSelectedId = sessions[0]?.sessionId ?? null;
+        detail = nextSelectedId ? await window.electron.teams.getCouncilSession(nextSelectedId) : null;
+      }
+
+      set((state) => ({
+        councilSessions: sessions,
+        selectedCouncilSessionId: nextSelectedId,
+        selectedCouncilSessionDetail: detail,
+        error: null,
+        pollIntervalMs: getDesiredPollInterval({
+          tasks: state.tasks,
+          trackedTaskIds: state.trackedTaskIds,
+          basePollIntervalMs: state.basePollIntervalMs,
+          teamsViewMode: state.teamsViewMode,
+          councilSessions: sessions,
+        }),
+      }));
+    } catch (error) {
+      set({ error: getErrorMessage(error, 'Failed to refresh council sessions') });
+    } finally {
+      if (!silent) {
+        setOperation(set, 'councilRefreshing', false);
+      }
+    }
+  },
+
+  selectCouncilSession: async (sessionId) => {
+    set({
+      teamsViewMode: 'councils',
+      selectedCouncilSessionId: sessionId,
+    });
+
+    try {
+      const detail = await window.electron.teams.getCouncilSession(sessionId);
+      set({ selectedCouncilSessionDetail: detail });
+    } catch (error) {
+      set({ error: getErrorMessage(error, 'Failed to load council session') });
+    }
+
+    if (get().pollingEnabled) {
+      scheduleNextPoll(set, get);
+    }
+  },
+
+  startCouncil: async (input) => {
+    setOperation(set, 'startingCouncil', true);
+
+    try {
+      await get().configure();
+      const started = await window.electron.teams.startCouncil(input);
+      set({
+        teamsViewMode: 'councils',
+        selectedCouncilSessionId: started.sessionId,
+      });
+      await get().refreshCouncils({ silent: true });
+
+      if (get().pollingEnabled) {
+        scheduleNextPoll(set, get);
+      }
+
+      return started;
+    } catch (error) {
+      const message = getErrorMessage(error, 'Failed to start council');
+      set({ error: message });
+      throw error;
+    } finally {
+      setOperation(set, 'startingCouncil', false);
+    }
+  },
 
   followTask: (id) => {
     beginTaskFollow(id, set, get);
