@@ -1,4 +1,6 @@
 import electron from "electron";
+import type { DispatchTaskInput, SpawnTeammateInput, TaskStatus } from "letta-teams-sdk";
+import type { TeamsConfigureInput } from "./teams-runtime.js";
 
 electron.contextBridge.exposeInMainWorld("electron", {
     subscribeStatistics: (callback: (stats: { cpuUsage: number; ramUsage: number; storageData: number }) => void) =>
@@ -67,6 +69,35 @@ electron.contextBridge.exposeInMainWorld("electron", {
             electron.ipcRenderer.on("letta-code:log", cb);
             return () => electron.ipcRenderer.off("letta-code:log", cb);
         },
+    },
+
+    teams: {
+        configure: (input: TeamsConfigureInput = {}) =>
+            ipcInvoke("teams:configure", input),
+        getDaemonStatus: () =>
+            ipcInvoke("teams:daemon:get-status"),
+        ensureDaemonRunning: () =>
+            ipcInvoke("teams:daemon:ensure-running"),
+        listTeammates: () =>
+            ipcInvoke("teams:teammates:list"),
+        getTeammate: (name: string) =>
+            ipcInvoke("teams:teammates:get", name),
+        spawnTeammate: (input: SpawnTeammateInput) =>
+            ipcInvoke("teams:teammates:spawn", input),
+        forkTeammate: (name: string, forkName: string) =>
+            ipcInvoke("teams:teammates:fork", name, forkName),
+        reinitTeammate: (name: string, prompt?: string) =>
+            ipcInvoke("teams:teammates:reinit", name, prompt),
+        listTasks: (status?: TaskStatus) =>
+            ipcInvoke("teams:tasks:list", status),
+        getTask: (id: string) =>
+            ipcInvoke("teams:tasks:get", id),
+        dispatchTask: (input: DispatchTaskInput) =>
+            ipcInvoke("teams:tasks:dispatch", input),
+        waitForTask: (id: string) =>
+            ipcInvoke("teams:tasks:wait", id),
+        cancelTask: (id: string) =>
+            ipcInvoke("teams:tasks:cancel", id),
     },
 
     // 3-mode connection health check

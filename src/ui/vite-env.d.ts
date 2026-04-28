@@ -2,6 +2,7 @@
 
 // Type imports for electron API
 import type { LettaCodeStatusPayload } from '../electron/letta-code-manager.js';
+import type { DispatchTaskInput, SpawnTeammateInput, TaskStatus } from 'letta-teams-sdk';
 
 declare global {
   interface Window {
@@ -35,6 +36,21 @@ declare global {
         stop: () => Promise<{ ok: boolean; error?: string }>;
         onStatus: (callback: (payload: LettaCodeStatusPayload) => void) => () => void;
         onLog: (callback: (entry: { stream: "stdout" | "stderr"; line: string }) => void) => () => void;
+      };
+      teams: {
+        configure: (input?: Partial<TeamsRuntimeConfig>) => Promise<TeamsRuntimeSnapshot>;
+        getDaemonStatus: () => Promise<TeamsDaemonStatusPayload>;
+        ensureDaemonRunning: () => Promise<TeamsDaemonStatusPayload>;
+        listTeammates: () => Promise<TeamsTeammateState[]>;
+        getTeammate: (name: string) => Promise<TeamsTeammateState | null>;
+        spawnTeammate: (input: SpawnTeammateInput) => Promise<TeamsTeammateState>;
+        forkTeammate: (name: string, forkName: string) => Promise<TeamsTeammateState>;
+        reinitTeammate: (name: string, prompt?: string) => Promise<string>;
+        listTasks: (status?: TaskStatus) => Promise<TeamsTaskState[]>;
+        getTask: (id: string) => Promise<TeamsTaskState | null>;
+        dispatchTask: (input: DispatchTaskInput) => Promise<{ taskId: string }>;
+        waitForTask: (id: string) => Promise<TeamsTaskState>;
+        cancelTask: (id: string) => Promise<TeamsTaskState>;
       };
       /** 3-mode connection health check */
       letta: {
