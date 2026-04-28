@@ -1,6 +1,6 @@
 import electron from "electron";
 import type { DispatchTaskInput, SpawnTeammateInput, TaskStatus } from "letta-teams-sdk";
-import type { TeamsConfigureInput } from "./teams-runtime.js";
+import type { TeamsConfigureInput, TeamsCouncilStartInput } from "./teams-runtime.js";
 
 electron.contextBridge.exposeInMainWorld("electron", {
     subscribeStatistics: (callback: (stats: { cpuUsage: number; ramUsage: number; storageData: number }) => void) =>
@@ -98,6 +98,12 @@ electron.contextBridge.exposeInMainWorld("electron", {
             ipcInvoke("teams:tasks:wait", id),
         cancelTask: (id: string) =>
             ipcInvoke("teams:tasks:cancel", id),
+        startCouncil: (input: TeamsCouncilStartInput) =>
+            ipcInvoke("teams:councils:start", input),
+        listCouncilSessions: () =>
+            ipcInvoke("teams:councils:list"),
+        getCouncilSession: (sessionId: string) =>
+            ipcInvoke("teams:councils:get", sessionId),
     },
 
     // 3-mode connection health check
