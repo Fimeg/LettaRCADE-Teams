@@ -1,39 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import type { DispatchTaskInput, SpawnTeammateInput } from 'letta-teams-sdk';
-import {
-  AlertCircle,
-  Bot,
-  FolderOpen,
-  GitFork,
-  Play,
-  RefreshCw,
-  RotateCcw,
-  Send,
-  Server,
-  Square,
-  Users,
-} from 'lucide-react';
+import { AlertCircle, FolderOpen, Play, RefreshCw, Send, Server, Users } from 'lucide-react';
 import { Button } from './ui/primitives/Button';
 import { Input } from './ui/primitives/Input';
-import { useTeamsStore } from '../store/useTeamsStore';
-
-const teammateStatusClasses: Record<string, string> = {
-  idle: 'bg-slate-100 text-slate-700',
-  working: 'bg-blue-100 text-blue-700',
-  done: 'bg-green-100 text-green-700',
-  error: 'bg-red-100 text-red-700',
-};
-
-const taskStatusClasses: Record<string, string> = {
-  pending: 'bg-amber-100 text-amber-700',
-  running: 'bg-blue-100 text-blue-700',
-  done: 'bg-green-100 text-green-700',
-  error: 'bg-red-100 text-red-700',
-  pending_review: 'bg-purple-100 text-purple-700',
-  reviewing: 'bg-purple-100 text-purple-700',
-  approved: 'bg-emerald-100 text-emerald-700',
-  rejected: 'bg-rose-100 text-rose-700',
-};
+import { SplitPaneDivider, SplitPaneGroup, SplitPanePanel } from './ui/layout/SplitPane';
+import { isTaskActive, useTeamsStore } from '../store/useTeamsStore';
+import { TeamsSidebar } from './teams/TeamsSidebar';
+import { TeamsTaskDetail } from './teams/TeamsTaskDetail';
+import { TeamsTeammateDetail } from './teams/TeamsTeammateDetail';
 
 const daemonStatusClasses: Record<string, string> = {
   stopped: 'bg-slate-100 text-slate-700',
@@ -43,19 +17,6 @@ const daemonStatusClasses: Record<string, string> = {
   crashed: 'bg-red-100 text-red-700',
 };
 
-function formatTimestamp(value?: string): string {
-  if (!value) return '—';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
-}
-
-function formatTaskPreview(task: TeamsTaskState): string {
-  if (task.error) return task.error;
-  if (task.result) return task.result;
-  return task.message;
-}
-
 export function TeamsView() {
   const supported = useTeamsStore((state) => state.supported);
   const bootstrapped = useTeamsStore((state) => state.bootstrapped);
@@ -64,6 +25,11 @@ export function TeamsView() {
   const daemon = useTeamsStore((state) => state.daemon);
   const teammates = useTeamsStore((state) => state.teammates);
   const tasks = useTeamsStore((state) => state.tasks);
+  const trackedTaskIds = useTeamsStore((state) => state.trackedTaskIds);
+  const selectedEntityType = useTeamsStore((state) => state.selectedEntityType);
+  const selectedTaskId = useTeamsStore((state) => state.selectedTaskId);
+  const selectedTeammateName = useTeamsStore((state) => state.selectedTeammateName);
+  const taskFilter = useTeamsStore((state) => state.taskFilter);
   const error = useTeamsStore((state) => state.error);
   const operations = useTeamsStore((state) => state.operations);
   const pollIntervalMs = useTeamsStore((state) => state.pollIntervalMs);
@@ -75,6 +41,9 @@ export function TeamsView() {
   const pickProjectDir = useTeamsStore((state) => state.pickProjectDir);
   const startPolling = useTeamsStore((state) => state.startPolling);
   const stopPolling = useTeamsStore((state) => state.stopPolling);
+  const selectTeammate = useTeamsStore((state) => state.selectTeammate);
+  const selectTask = useTeamsStore((state) => state.selectTask);
+  const setTaskFilter = useTeamsStore((state) => state.setTaskFilter);
   const spawnTeammate = useTeamsStore((state) => state.spawnTeammate);
   const forkTeammate = useTeamsStore((state) => state.forkTeammate);
   const reinitTeammate = useTeamsStore((state) => state.reinitTeammate);
@@ -116,15 +85,22 @@ export function TeamsView() {
 
   const daemonStatus = daemon?.status ?? 'stopped';
   const daemonClassName = daemonStatusClasses[daemonStatus] ?? daemonStatusClasses.stopped;
-
-  const recentTasks = useMemo(() => tasks.slice(0, 12), [tasks]);
+  const activeTaskCount = useMemo(() => tasks.filter((task) => isTaskActive(task)).length, [tasks]);
+  const selectedTask = useMemo(
+    () => tasks.find((task) => task.id === selectedTaskId) ?? null,
+    [tasks, selectedTaskId],
+  );
+  const selectedTeammate = useMemo(
+    () => teammates.find((teammate) => teammate.name === selectedTeammateName) ?? null,
+    [teammates, selectedTeammateName],
+  );
 
   const handleApplyProjectDir = async () => {
     if (!projectDirInput.trim()) return;
     await setProjectDir(projectDirInput);
   };
 
-  const handleSpawn = async (event: React.FormEvent) => {
+  const handleSpawn = async (event: FormEvent) => {
     event.preventDefault();
 
     const input: SpawnTeammateInput = {
@@ -138,11 +114,12 @@ export function TeamsView() {
       return;
     }
 
-    await spawnTeammate(input);
-    setSpawnForm({ name: '', role: '', model: '', memfsEnabled: spawnForm.memfsEnabled });
+    const teammate = await spawnTeammate(input);
+    setSpawnForm((current) => ({ ...current, name: '', role: '', model: '' }));
+    setDispatchForm((current) => ({ ...current, target: current.target || teammate.name }));
   };
 
-  const handleDispatch = async (event: React.FormEvent) => {
+  const handleDispatch = async (event: FormEvent) => {
     event.preventDefault();
 
     const input: DispatchTaskInput = {
@@ -156,6 +133,10 @@ export function TeamsView() {
 
     await dispatchTask(input);
     setDispatchForm((current) => ({ ...current, message: '' }));
+  };
+
+  const handleDispatchTarget = (target: string) => {
+    setDispatchForm((current) => ({ ...current, target }));
   };
 
   const handleFork = async (name: string) => {
@@ -205,7 +186,7 @@ export function TeamsView() {
                     </span>
                   </div>
                   <p className="text-sm text-ink-600">
-                    Configure the project directory, keep the daemon alive, and poll teammate/task state every {Math.round(pollIntervalMs / 1000)}s.
+                    Monitoring {teammates.length} teammates and {tasks.length} tasks with a live cadence of {Math.round(pollIntervalMs / 1000)}s.
                   </p>
                 </div>
               </div>
@@ -224,8 +205,8 @@ export function TeamsView() {
                   <dd className="mt-1 text-sm text-ink-900">{daemon?.pid ?? '—'}</dd>
                 </div>
                 <div>
-                  <dt className="text-xs font-medium uppercase tracking-wide text-ink-500">Log path</dt>
-                  <dd className="mt-1 break-all text-sm text-ink-900">{daemon?.logPath ?? '—'}</dd>
+                  <dt className="text-xs font-medium uppercase tracking-wide text-ink-500">Active tasks</dt>
+                  <dd className="mt-1 text-sm text-ink-900">{activeTaskCount}</dd>
                 </div>
               </dl>
             </div>
@@ -283,7 +264,7 @@ export function TeamsView() {
           )}
         </section>
 
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,360px)_minmax(0,1fr)_minmax(0,1fr)]">
+        <div className="grid gap-6 xl:grid-cols-2">
           <section className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
             <div className="mb-4 flex items-center gap-2">
               <Users className="h-4 w-4 text-accent" />
@@ -310,24 +291,26 @@ export function TeamsView() {
                 />
               </div>
 
-              <div>
-                <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Model (optional)</label>
-                <Input
-                  value={spawnForm.model}
-                  onChange={(event) => setSpawnForm((current) => ({ ...current, model: event.target.value }))}
-                  placeholder="anthropic/claude-sonnet-4"
-                />
-              </div>
+              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
+                <div>
+                  <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Model (optional)</label>
+                  <Input
+                    value={spawnForm.model}
+                    onChange={(event) => setSpawnForm((current) => ({ ...current, model: event.target.value }))}
+                    placeholder="anthropic/claude-sonnet-4"
+                  />
+                </div>
 
-              <label className="flex items-center gap-2 rounded-lg border border-ink-900/10 bg-surface-cream px-3 py-2 text-sm text-ink-700">
-                <input
-                  type="checkbox"
-                  checked={spawnForm.memfsEnabled}
-                  onChange={(event) => setSpawnForm((current) => ({ ...current, memfsEnabled: event.target.checked }))}
-                  className="h-4 w-4 rounded border-ink-900/20 text-accent focus:ring-accent/50"
-                />
-                Enable memfs for this teammate
-              </label>
+                <label className="flex items-center gap-2 rounded-lg border border-ink-900/10 bg-surface-cream px-3 py-2 text-sm text-ink-700 md:self-end">
+                  <input
+                    type="checkbox"
+                    checked={spawnForm.memfsEnabled}
+                    onChange={(event) => setSpawnForm((current) => ({ ...current, memfsEnabled: event.target.checked }))}
+                    className="h-4 w-4 rounded border-ink-900/20 text-accent focus:ring-accent/50"
+                  />
+                  Enable memfs
+                </label>
+              </div>
 
               <Button type="submit" className="w-full" isLoading={operations.spawning} disabled={!configured}>
                 Spawn teammate
@@ -336,84 +319,9 @@ export function TeamsView() {
           </section>
 
           <section className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <Bot className="h-4 w-4 text-accent" />
-                <h3 className="text-base font-semibold text-ink-900">Teammates</h3>
-              </div>
-              <span className="rounded-full bg-surface-cream px-2.5 py-1 text-xs font-medium text-ink-600">
-                {teammates.length}
-              </span>
-            </div>
-
-            <div className="space-y-3">
-              {teammates.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-ink-900/15 bg-surface-cream px-4 py-6 text-sm text-ink-600">
-                  No teammates yet. Spawn one to start dispatching work.
-                </div>
-              ) : (
-                teammates.map((teammate) => {
-                  const statusClassName = teammateStatusClasses[teammate.status] ?? teammateStatusClasses.idle;
-
-                  return (
-                    <div key={teammate.name} className="rounded-xl border border-ink-900/10 bg-surface p-4">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-semibold text-ink-900">{teammate.name}</span>
-                            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${statusClassName}`}>
-                              {teammate.status}
-                            </span>
-                            {teammate.memfsEnabled && (
-                              <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-medium text-accent">
-                                memfs
-                              </span>
-                            )}
-                          </div>
-                          <p className="mt-1 text-sm text-ink-600">{teammate.role}</p>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <Button size="sm" variant="secondary" leftIcon={Send} onClick={() => setDispatchForm((current) => ({ ...current, target: teammate.name }))}>
-                            Target
-                          </Button>
-                          <Button size="sm" variant="secondary" leftIcon={GitFork} onClick={() => void handleFork(teammate.name)}>
-                            Fork
-                          </Button>
-                          <Button size="sm" variant="secondary" leftIcon={RotateCcw} onClick={() => void handleReinit(teammate.name)}>
-                            Reinit
-                          </Button>
-                        </div>
-                      </div>
-
-                      <dl className="mt-3 grid gap-3 text-xs text-ink-600 sm:grid-cols-2">
-                        <div>
-                          <dt className="font-medium uppercase tracking-wide text-ink-500">Agent ID</dt>
-                          <dd className="mt-1 break-all text-ink-800">{teammate.agentId}</dd>
-                        </div>
-                        <div>
-                          <dt className="font-medium uppercase tracking-wide text-ink-500">Model</dt>
-                          <dd className="mt-1 break-all text-ink-800">{teammate.model ?? '—'}</dd>
-                        </div>
-                        <div>
-                          <dt className="font-medium uppercase tracking-wide text-ink-500">Targets</dt>
-                          <dd className="mt-1 text-ink-800">{teammate.targets?.length ?? 0}</dd>
-                        </div>
-                        <div>
-                          <dt className="font-medium uppercase tracking-wide text-ink-500">Updated</dt>
-                          <dd className="mt-1 text-ink-800">{formatTimestamp(teammate.lastUpdated)}</dd>
-                        </div>
-                      </dl>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </section>
-
-          <section className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
             <div className="mb-4 flex items-center gap-2">
               <Send className="h-4 w-4 text-accent" />
-              <h3 className="text-base font-semibold text-ink-900">Dispatch & tasks</h3>
+              <h3 className="text-base font-semibold text-ink-900">Dispatch task</h3>
             </div>
 
             <form className="space-y-3" onSubmit={handleDispatch}>
@@ -438,62 +346,78 @@ export function TeamsView() {
                 Dispatch task
               </Button>
             </form>
-
-            <div className="mt-6 space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <h4 className="text-sm font-semibold text-ink-900">Recent tasks</h4>
-                <span className="rounded-full bg-surface-cream px-2.5 py-1 text-xs font-medium text-ink-600">
-                  {tasks.length}
-                </span>
-              </div>
-
-              {recentTasks.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-ink-900/15 bg-surface-cream px-4 py-6 text-sm text-ink-600">
-                  No tasks yet. Dispatch work to a teammate to populate the queue.
-                </div>
-              ) : (
-                recentTasks.map((task) => {
-                  const statusClassName = taskStatusClasses[task.status] ?? taskStatusClasses.pending;
-                  const canCancel = task.status === 'pending' || task.status === 'running';
-
-                  return (
-                    <div key={task.id} className="rounded-xl border border-ink-900/10 bg-surface p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-sm font-semibold text-ink-900">{task.targetName ?? task.teammateName}</span>
-                            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${statusClassName}`}>
-                              {task.status}
-                            </span>
-                          </div>
-                          <p className="mt-1 break-all text-xs text-ink-500">{task.id}</p>
-                        </div>
-                        {canCancel && (
-                          <Button size="sm" variant="ghost" leftIcon={Square} onClick={() => void cancelTask(task.id)}>
-                            Cancel
-                          </Button>
-                        )}
-                      </div>
-
-                      <p className="mt-3 line-clamp-3 text-sm text-ink-700">{formatTaskPreview(task)}</p>
-
-                      <dl className="mt-3 grid gap-3 text-xs text-ink-600 sm:grid-cols-2">
-                        <div>
-                          <dt className="font-medium uppercase tracking-wide text-ink-500">Created</dt>
-                          <dd className="mt-1 text-ink-800">{formatTimestamp(task.createdAt)}</dd>
-                        </div>
-                        <div>
-                          <dt className="font-medium uppercase tracking-wide text-ink-500">Completed</dt>
-                          <dd className="mt-1 text-ink-800">{formatTimestamp(task.completedAt)}</dd>
-                        </div>
-                      </dl>
-                    </div>
-                  );
-                })
-              )}
-            </div>
           </section>
         </div>
+
+        <section className="overflow-hidden rounded-2xl border border-ink-900/10 bg-white/80 shadow-sm backdrop-blur-sm">
+          <div className="border-b border-ink-900/10 px-5 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold text-ink-900">Task monitoring</h3>
+                <p className="text-sm text-ink-600">
+                  Track active work, inspect teammate execution state, and follow task outcomes in one place.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2 text-xs">
+                <span className="rounded-full bg-surface-cream px-2.5 py-1 font-medium text-ink-600">
+                  {trackedTaskIds.length} live follows
+                </span>
+                <span className="rounded-full bg-surface-cream px-2.5 py-1 font-medium text-ink-600">
+                  {activeTaskCount} active tasks
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="h-[760px]">
+            <SplitPaneGroup orientation="horizontal" defaultLayout={[34, 66]} storageKey="teams-monitoring-pane">
+              <SplitPanePanel minSize={28} defaultSize={34}>
+                <TeamsSidebar
+                  teammates={teammates}
+                  tasks={tasks}
+                  trackedTaskIds={trackedTaskIds}
+                  selectedEntityType={selectedEntityType}
+                  selectedTaskId={selectedTaskId}
+                  selectedTeammateName={selectedTeammateName}
+                  taskFilter={taskFilter}
+                  onSelectTeammate={selectTeammate}
+                  onSelectTask={selectTask}
+                  onSetTaskFilter={setTaskFilter}
+                  onDispatchTarget={handleDispatchTarget}
+                />
+              </SplitPanePanel>
+              <SplitPaneDivider orientation="horizontal" />
+              <SplitPanePanel minSize={40} defaultSize={66}>
+                {selectedEntityType === 'task' && selectedTask ? (
+                  <TeamsTaskDetail
+                    task={selectedTask}
+                    tracked={trackedTaskIds.includes(selectedTask.id)}
+                    onCancel={(id) => void cancelTask(id)}
+                    onSelectTeammate={selectTeammate}
+                    onSelectTask={selectTask}
+                  />
+                ) : selectedTeammate ? (
+                  <TeamsTeammateDetail
+                    teammate={selectedTeammate}
+                    onFork={(name) => void handleFork(name)}
+                    onReinit={(name) => void handleReinit(name)}
+                    onDispatchTarget={handleDispatchTarget}
+                    onSelectTask={selectTask}
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center bg-surface px-6 py-10 text-center">
+                    <div className="max-w-md space-y-3">
+                      <h4 className="text-lg font-semibold text-ink-900">Nothing selected yet</h4>
+                      <p className="text-sm text-ink-600">
+                        Pick a teammate or task from the left pane to inspect its live state.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </SplitPanePanel>
+            </SplitPaneGroup>
+          </div>
+        </section>
       </div>
     </div>
   );
