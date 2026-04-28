@@ -50,6 +50,33 @@ type OperatorProfileData = {
     updatedAt: number;
 }
 
+type TeamsTaskState = import("letta-teams-sdk").TaskState;
+type TeamsTeammateState = import("letta-teams-sdk").TeammateState;
+
+type TeamsRuntimeConfig = {
+    baseUrl: string;
+    apiKey?: string;
+    projectDir: string;
+}
+
+type TeamsDaemonStatus = "stopped" | "starting" | "running" | "stopping" | "crashed";
+
+type TeamsDaemonStatusPayload = {
+    status: TeamsDaemonStatus;
+    pid?: number;
+    port: number;
+    baseUrl: string;
+    projectDir: string;
+    logPath: string;
+    error?: string;
+}
+
+type TeamsRuntimeSnapshot = {
+    configured: boolean;
+    config: TeamsRuntimeConfig;
+    daemon: TeamsDaemonStatusPayload;
+}
+
 type EventPayloadMapping = {
     statistics: Statistics;
     getStaticData: StaticData;
@@ -68,6 +95,19 @@ type EventPayloadMapping = {
     "letta-code:spawn": LettaCodeStatusPayload;
     "letta-code:stop": LettaCodeStatusPayload;
     "letta:health-check": HealthCheckResult;
+    "teams:configure": TeamsRuntimeSnapshot;
+    "teams:daemon:get-status": TeamsDaemonStatusPayload;
+    "teams:daemon:ensure-running": TeamsDaemonStatusPayload;
+    "teams:teammates:list": TeamsTeammateState[];
+    "teams:teammates:get": TeamsTeammateState | null;
+    "teams:teammates:spawn": TeamsTeammateState;
+    "teams:teammates:fork": TeamsTeammateState;
+    "teams:teammates:reinit": string;
+    "teams:tasks:list": TeamsTaskState[];
+    "teams:tasks:get": TeamsTaskState | null;
+    "teams:tasks:dispatch": { taskId: string };
+    "teams:tasks:wait": TeamsTaskState;
+    "teams:tasks:cancel": TeamsTaskState;
 }
 
 type LettaCodeStatus = "stopped" | "starting" | "running" | "stopping" | "crashed";
