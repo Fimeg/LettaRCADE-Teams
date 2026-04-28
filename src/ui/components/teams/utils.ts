@@ -52,3 +52,20 @@ export function formatProgress(progress?: number): string {
 export function getTaskDisplayName(task: TaskState): string {
   return task.targetName ?? task.teammateName;
 }
+
+export function getReviewGateLabel(gate?: 'on_success' | 'always'): string {
+  switch (gate) {
+    case 'always':
+      return 'Always review';
+    case 'on_success':
+      return 'Review on success';
+    default:
+      return '—';
+  }
+}
+
+export function getReviewGateHelpText(gate: 'on_success' | 'always'): string {
+  return gate === 'always'
+    ? 'The reviewer will run even if the worker task errors.'
+    : 'The reviewer will only run after successful worker completion.';
+}
