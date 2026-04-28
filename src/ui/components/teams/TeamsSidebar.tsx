@@ -3,7 +3,14 @@ import { Bot, Radio, Send, Users } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import type { TeamsSelectionType, TeamsTaskFilter } from '../../store/useTeamsStore';
 import { isTaskActive, isTaskCompleted, isTaskFailed } from '../../store/useTeamsStore';
-import { formatTaskPreview, formatTimestamp, getTaskDisplayName, taskStatusClasses, teammateStatusClasses } from './utils';
+import {
+  formatTaskPreview,
+  formatTimestamp,
+  getReviewGateLabel,
+  getTaskDisplayName,
+  taskStatusClasses,
+  teammateStatusClasses,
+} from './utils';
 
 interface TeamsSidebarProps {
   teammates: TeammateState[];
@@ -41,6 +48,10 @@ function matchesTaskFilter(task: TaskState, filter: TeamsTaskFilter): boolean {
     default:
       return true;
   }
+}
+
+function isReviewTask(task: TaskState, allTasks: TaskState[]): boolean {
+  return allTasks.some((candidate) => candidate.reviewTaskId === task.id);
 }
 
 export function TeamsSidebar({
@@ -174,6 +185,11 @@ export function TeamsSidebar({
               const isSelected = selectedEntityType === 'task' && selectedTaskId === task.id;
               const isTracked = trackedTaskIds.includes(task.id);
               const statusClassName = taskStatusClasses[task.status] ?? taskStatusClasses.pending;
+              const linkedReviewTask = task.reviewTaskId
+                ? tasks.find((candidate) => candidate.id === task.reviewTaskId)
+                : null;
+              const reviewChildCount = tasks.filter((candidate) => candidate.reviewTaskId === task.id).length;
+              const reviewTask = isReviewTask(task, tasks);
 
               return (
                 <button
@@ -194,6 +210,16 @@ export function TeamsSidebar({
                         <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${statusClassName}`}>
                           {task.status}
                         </span>
+                        {task.requiresReview && (
+                          <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[11px] font-medium text-purple-700">
+                            review
+                          </span>
+                        )}
+                        {reviewTask && (
+                          <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
+                            reviewer
+                          </span>
+                        )}
                         {isTracked && (
                           <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-medium text-accent">
                             live
@@ -201,6 +227,25 @@ export function TeamsSidebar({
                         )}
                       </div>
                       <p className="mt-1 line-clamp-2 text-xs text-ink-600">{formatTaskPreview(task)}</p>
+
+                      {(task.requiresReview || reviewTask) && (
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-ink-500">
+                          {task.reviewTarget && (
+                            <span>
+                              Reviewer {task.reviewTarget}
+                            </span>
+                          )}
+                          {task.reviewGatePolicy && (
+                            <span>{getReviewGateLabel(task.reviewGatePolicy)}</span>
+                          )}
+                          {linkedReviewTask && (
+                            <span>Linked task {linkedReviewTask.status}</span>
+                          )}
+                          {reviewChildCount > 0 && (
+                            <span>Reviewing {reviewChildCount} task{reviewChildCount === 1 ? '' : 's'}</span>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     <Send className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-400" />
