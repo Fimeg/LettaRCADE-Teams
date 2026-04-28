@@ -17,9 +17,17 @@ import {
   isDaemonRunning,
   reinitTeammateViaDaemon,
   spawnTeammateViaDaemon,
+  startCouncilViaDaemon,
   waitForDaemon,
   waitForTask,
 } from "letta-teams-sdk/ipc";
+import {
+  listCouncilOpinions,
+  listCouncilSessions as listStoredCouncilSessions,
+  loadCouncilSession,
+  readCouncilFinalPlan,
+  readCouncilSynthesis,
+} from "letta-teams-sdk/council/store";
 import {
   getTask,
   listTasks,
@@ -61,6 +69,64 @@ export interface TeamsRuntimeSnapshot {
   configured: boolean;
   config: TeamsRuntimeConfig;
   daemon: TeamsDaemonStatusPayload;
+}
+
+export type TeamsCouncilSessionStatus = "running" | "decided" | "max_turns" | "error";
+export type TeamsCouncilVote = "agree" | "disagree";
+export type TeamsCouncilSide = "thesis" | "antithesis";
+
+export interface TeamsCouncilStartInput {
+  prompt: string;
+  message?: string;
+  participantNames?: string[];
+  maxTurns?: number;
+}
+
+export interface TeamsCouncilOpinionRecord {
+  sessionId: string;
+  turn: number;
+  agentName: string;
+  side: TeamsCouncilSide;
+  position: string;
+  evidence?: string[];
+  proposal?: string;
+  risks?: string[];
+  openQuestions?: string[];
+  createdAt: string;
+}
+
+export interface TeamsCouncilTurnState {
+  turn: number;
+  startedAt: string;
+  completedAt?: string;
+  opinionSubmittedBy: string[];
+  votesBy: Record<string, TeamsCouncilVote>;
+  notesBy: Record<string, string>;
+  synthesisPath?: string;
+}
+
+export interface TeamsCouncilSessionMeta {
+  sessionId: string;
+  prompt: string;
+  message?: string;
+  createdAt: string;
+  updatedAt: string;
+  status: TeamsCouncilSessionStatus;
+  participants: string[];
+  leadName?: string;
+  currentTurn: number;
+  maxTurns: number;
+  turns: Record<string, TeamsCouncilTurnState>;
+  finalPlanPath?: string;
+  finalDecision?: string;
+  error?: string;
+}
+
+export interface TeamsCouncilSessionDetail {
+  meta: TeamsCouncilSessionMeta;
+  opinionsByTurn: Record<string, TeamsCouncilOpinionRecord[]>;
+  synthesisByTurn: Record<string, string>;
+  finalPlan: string | null;
 }
 
 function getDefaultBaseUrl(): string {
@@ -276,6 +342,62 @@ export class TeamsRuntimeManager {
       }
 
       return cancelled;
+    });
+  }
+
+  async startCouncil(input: TeamsCouncilStartInput): Promise<{ sessionId: string }> {
+    await this.ensureDaemonRunning();
+    return startCouncilViaDaemon(input.prompt, {
+      message: input.message,
+      participantNames: input.participantNames,
+      maxTurns: input.maxTurns,
+      projectDir: this.config.projectDir,
+    });
+  }
+
+  async listCouncilSessions(): Promise<TeamsCouncilSessionMeta[]> {
+    return this.withProjectContext(() => {
+      const sessionIds = listStoredCouncilSessions();
+      const sessions = sessionIds
+        .map((sessionId) => loadCouncilSession(sessionId) as TeamsCouncilSessionMeta | null)
+        .filter((session): session is TeamsCouncilSessionMeta => !!session)
+        .sort((a, b) => {
+          const aTime = Date.parse(a.updatedAt) || Date.parse(a.createdAt) || 0;
+          const bTime = Date.parse(b.updatedAt) || Date.parse(b.createdAt) || 0;
+          return bTime - aTime;
+        });
+
+      return sessions;
+    });
+  }
+
+  async getCouncilSession(sessionId: string): Promise<TeamsCouncilSessionDetail | null> {
+    return this.withProjectContext(() => {
+      const meta = loadCouncilSession(sessionId) as TeamsCouncilSessionMeta | null;
+      if (!meta) {
+        return null;
+      }
+
+      const turnEntries = Object.keys(meta.turns).sort((a, b) => Number(a) - Number(b));
+      const opinionsByTurn: Record<string, TeamsCouncilOpinionRecord[]> = {};
+      const synthesisByTurn: Record<string, string> = {};
+
+      for (const turnKey of turnEntries) {
+        const turnNumber = Number(turnKey);
+        opinionsByTurn[turnKey] = listCouncilOpinions(sessionId, turnNumber) as TeamsCouncilOpinionRecord[];
+
+        const synthesis = readCouncilSynthesis(sessionId, turnNumber);
+        if (synthesis) {
+          synthesisByTurn[turnKey] = synthesis;
+        }
+      }
+
+      return {
+        meta,
+        opinionsByTurn,
+        synthesisByTurn,
+        finalPlan: readCouncilFinalPlan(sessionId),
+      };
     });
   }
 
