@@ -52,6 +52,9 @@ type OperatorProfileData = {
 
 type TeamsTaskState = import("letta-teams-sdk").TaskState;
 type TeamsTeammateState = import("letta-teams-sdk").TeammateState;
+type TeamsSpawnInput = import("letta-teams-sdk").SpawnTeammateInput;
+type TeamsDispatchInput = import("letta-teams-sdk").DispatchTaskInput;
+type TeamsTaskStatus = import("letta-teams-sdk").TaskStatus;
 
 type TeamsRuntimeConfig = {
     baseUrl: string;
@@ -156,6 +159,21 @@ interface Window {
             stop: () => Promise<LettaCodeStatusPayload>;
             onStatus: (callback: (payload: LettaCodeStatusPayload) => void) => UnsubscribeFunction;
             onLog: (callback: (entry: { stream: "stdout" | "stderr"; line: string }) => void) => UnsubscribeFunction;
+        };
+        teams: {
+            configure: (input?: Partial<TeamsRuntimeConfig>) => Promise<TeamsRuntimeSnapshot>;
+            getDaemonStatus: () => Promise<TeamsDaemonStatusPayload>;
+            ensureDaemonRunning: () => Promise<TeamsDaemonStatusPayload>;
+            listTeammates: () => Promise<TeamsTeammateState[]>;
+            getTeammate: (name: string) => Promise<TeamsTeammateState | null>;
+            spawnTeammate: (input: TeamsSpawnInput) => Promise<TeamsTeammateState>;
+            forkTeammate: (name: string, forkName: string) => Promise<TeamsTeammateState>;
+            reinitTeammate: (name: string, prompt?: string) => Promise<string>;
+            listTasks: (status?: TeamsTaskStatus) => Promise<TeamsTaskState[]>;
+            getTask: (id: string) => Promise<TeamsTaskState | null>;
+            dispatchTask: (input: TeamsDispatchInput) => Promise<{ taskId: string }>;
+            waitForTask: (id: string) => Promise<TeamsTaskState>;
+            cancelTask: (id: string) => Promise<TeamsTaskState>;
         };
     }
 }
