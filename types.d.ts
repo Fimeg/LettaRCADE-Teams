@@ -56,6 +56,64 @@ type TeamsSpawnInput = import("letta-teams-sdk").SpawnTeammateInput;
 type TeamsDispatchInput = import("letta-teams-sdk").DispatchTaskInput;
 type TeamsTaskStatus = import("letta-teams-sdk").TaskStatus;
 
+type TeamsCouncilSessionStatus = "running" | "decided" | "max_turns" | "error";
+type TeamsCouncilVote = "agree" | "disagree";
+type TeamsCouncilSide = "thesis" | "antithesis";
+
+type TeamsCouncilStartInput = {
+    prompt: string;
+    message?: string;
+    participantNames?: string[];
+    maxTurns?: number;
+}
+
+type TeamsCouncilOpinionRecord = {
+    sessionId: string;
+    turn: number;
+    agentName: string;
+    side: TeamsCouncilSide;
+    position: string;
+    evidence?: string[];
+    proposal?: string;
+    risks?: string[];
+    openQuestions?: string[];
+    createdAt: string;
+}
+
+type TeamsCouncilTurnState = {
+    turn: number;
+    startedAt: string;
+    completedAt?: string;
+    opinionSubmittedBy: string[];
+    votesBy: Record<string, TeamsCouncilVote>;
+    notesBy: Record<string, string>;
+    synthesisPath?: string;
+}
+
+type TeamsCouncilSessionMeta = {
+    sessionId: string;
+    prompt: string;
+    message?: string;
+    createdAt: string;
+    updatedAt: string;
+    status: TeamsCouncilSessionStatus;
+    participants: string[];
+    leadName?: string;
+    currentTurn: number;
+    maxTurns: number;
+    turns: Record<string, TeamsCouncilTurnState>;
+    finalPlanPath?: string;
+    finalDecision?: string;
+    error?: string;
+}
+
+type TeamsCouncilSessionDetail = {
+    meta: TeamsCouncilSessionMeta;
+    opinionsByTurn: Record<string, TeamsCouncilOpinionRecord[]>;
+    synthesisByTurn: Record<string, string>;
+    finalPlan: string | null;
+}
+
 type TeamsRuntimeConfig = {
     baseUrl: string;
     apiKey?: string;
@@ -111,6 +169,9 @@ type EventPayloadMapping = {
     "teams:tasks:dispatch": { taskId: string };
     "teams:tasks:wait": TeamsTaskState;
     "teams:tasks:cancel": TeamsTaskState;
+    "teams:councils:start": { sessionId: string };
+    "teams:councils:list": TeamsCouncilSessionMeta[];
+    "teams:councils:get": TeamsCouncilSessionDetail | null;
 }
 
 type LettaCodeStatus = "stopped" | "starting" | "running" | "stopping" | "crashed";
@@ -174,6 +235,9 @@ interface Window {
             dispatchTask: (input: TeamsDispatchInput) => Promise<{ taskId: string }>;
             waitForTask: (id: string) => Promise<TeamsTaskState>;
             cancelTask: (id: string) => Promise<TeamsTaskState>;
+            startCouncil: (input: TeamsCouncilStartInput) => Promise<{ sessionId: string }>;
+            listCouncilSessions: () => Promise<TeamsCouncilSessionMeta[]>;
+            getCouncilSession: (sessionId: string) => Promise<TeamsCouncilSessionDetail | null>;
         };
     }
 }

@@ -4,10 +4,12 @@ import { AlertCircle, FolderOpen, Play, RefreshCw, Send, Server, Users } from 'l
 import { Button } from './ui/primitives/Button';
 import { Input } from './ui/primitives/Input';
 import { SplitPaneDivider, SplitPaneGroup, SplitPanePanel } from './ui/layout/SplitPane';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/layout/Tabs';
 import { isTaskActive, useTeamsStore } from '../store/useTeamsStore';
 import { TeamsSidebar } from './teams/TeamsSidebar';
 import { TeamsTaskDetail } from './teams/TeamsTaskDetail';
 import { TeamsTeammateDetail } from './teams/TeamsTeammateDetail';
+import TeamsCouncilsView from './teams/TeamsCouncilsView';
 import { getReviewGateHelpText } from './teams/utils';
 
 const daemonStatusClasses: Record<string, string> = {
@@ -31,24 +33,32 @@ export function TeamsView() {
   const selectedTaskId = useTeamsStore((state) => state.selectedTaskId);
   const selectedTeammateName = useTeamsStore((state) => state.selectedTeammateName);
   const taskFilter = useTeamsStore((state) => state.taskFilter);
+  const teamsViewMode = useTeamsStore((state) => state.teamsViewMode);
+  const councilSessions = useTeamsStore((state) => state.councilSessions);
+  const selectedCouncilSessionId = useTeamsStore((state) => state.selectedCouncilSessionId);
+  const selectedCouncilSessionDetail = useTeamsStore((state) => state.selectedCouncilSessionDetail);
   const error = useTeamsStore((state) => state.error);
   const operations = useTeamsStore((state) => state.operations);
   const pollIntervalMs = useTeamsStore((state) => state.pollIntervalMs);
   const clearError = useTeamsStore((state) => state.clearError);
   const bootstrap = useTeamsStore((state) => state.bootstrap);
   const refresh = useTeamsStore((state) => state.refresh);
+  const refreshCouncils = useTeamsStore((state) => state.refreshCouncils);
   const ensureDaemonRunning = useTeamsStore((state) => state.ensureDaemonRunning);
   const setProjectDir = useTeamsStore((state) => state.setProjectDir);
   const pickProjectDir = useTeamsStore((state) => state.pickProjectDir);
   const startPolling = useTeamsStore((state) => state.startPolling);
   const stopPolling = useTeamsStore((state) => state.stopPolling);
+  const setTeamsViewMode = useTeamsStore((state) => state.setTeamsViewMode);
   const selectTeammate = useTeamsStore((state) => state.selectTeammate);
   const selectTask = useTeamsStore((state) => state.selectTask);
   const setTaskFilter = useTeamsStore((state) => state.setTaskFilter);
+  const selectCouncilSession = useTeamsStore((state) => state.selectCouncilSession);
   const spawnTeammate = useTeamsStore((state) => state.spawnTeammate);
   const forkTeammate = useTeamsStore((state) => state.forkTeammate);
   const reinitTeammate = useTeamsStore((state) => state.reinitTeammate);
   const dispatchTask = useTeamsStore((state) => state.dispatchTask);
+  const startCouncil = useTeamsStore((state) => state.startCouncil);
   const cancelTask = useTeamsStore((state) => state.cancelTask);
 
   const [projectDirInput, setProjectDirInput] = useState('');
@@ -86,6 +96,12 @@ export function TeamsView() {
   useEffect(() => {
     setProjectDirInput(snapshot?.config.projectDir ?? '');
   }, [snapshot?.config.projectDir]);
+
+  useEffect(() => {
+    if (teamsViewMode === 'councils') {
+      void refreshCouncils({ silent: councilSessions.length > 0 });
+    }
+  }, [teamsViewMode, refreshCouncils]);
 
   const daemonStatus = daemon?.status ?? 'stopped';
   const daemonClassName = daemonStatusClasses[daemonStatus] ?? daemonStatusClasses.stopped;
@@ -199,7 +215,7 @@ export function TeamsView() {
             <div>
               <h2 className="text-lg font-semibold">Teams is only available in Electron</h2>
               <p className="mt-2 text-sm text-amber-800">
-                The Teams runtime depends on the Electron main-process IPC bridge. Open this app in the desktop shell to manage teammates and tasks.
+                The Teams runtime depends on the Electron main-process IPC bridge. Open this app in the desktop shell to manage teammates, tasks, and council sessions.
               </p>
             </div>
           </div>
@@ -226,7 +242,7 @@ export function TeamsView() {
                     </span>
                   </div>
                   <p className="text-sm text-ink-600">
-                    Monitoring {teammates.length} teammates and {tasks.length} tasks with a live cadence of {Math.round(pollIntervalMs / 1000)}s.
+                    Monitoring {teammates.length} teammates, {tasks.length} tasks, and {councilSessions.length} council sessions with a live cadence of {Math.round(pollIntervalMs / 1000)}s.
                   </p>
                 </div>
               </div>
@@ -285,7 +301,7 @@ export function TeamsView() {
                   onClick={() => void refresh()}
                   isLoading={operations.refreshing || operations.bootstrapping}
                 >
-                  Refresh
+                  Refresh tasks
                 </Button>
               </div>
             </div>
@@ -304,217 +320,242 @@ export function TeamsView() {
           )}
         </section>
 
-        <div className="grid gap-6 xl:grid-cols-2">
-          <section className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
-            <div className="mb-4 flex items-center gap-2">
-              <Users className="h-4 w-4 text-accent" />
-              <h3 className="text-base font-semibold text-ink-900">Spawn teammate</h3>
-            </div>
+        <Tabs value={teamsViewMode} onValueChange={(value) => setTeamsViewMode(value as 'monitor' | 'councils')}>
+          <TabsList>
+            <TabsTrigger value="monitor">Monitor</TabsTrigger>
+            <TabsTrigger value="councils" badge={councilSessions.length}>Councils</TabsTrigger>
+          </TabsList>
 
-            <form className="space-y-3" onSubmit={handleSpawn}>
-              <div>
-                <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Name</label>
-                <Input
-                  value={spawnForm.name}
-                  onChange={(event) => setSpawnForm((current) => ({ ...current, name: event.target.value }))}
-                  placeholder="researcher"
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Role</label>
-                <textarea
-                  value={spawnForm.role}
-                  onChange={(event) => setSpawnForm((current) => ({ ...current, role: event.target.value }))}
-                  placeholder="Investigates implementation details and reports findings."
-                  className="min-h-24 w-full rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-sm text-ink-900 outline-none transition-colors placeholder:text-ink-400 focus:ring-2 focus:ring-accent/50"
-                />
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
-                <div>
-                  <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Model (optional)</label>
-                  <Input
-                    value={spawnForm.model}
-                    onChange={(event) => setSpawnForm((current) => ({ ...current, model: event.target.value }))}
-                    placeholder="anthropic/claude-sonnet-4"
-                  />
+          <TabsContent value="monitor" className="mt-6 space-y-6">
+            <div className="grid gap-6 xl:grid-cols-2">
+              <section className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
+                <div className="mb-4 flex items-center gap-2">
+                  <Users className="h-4 w-4 text-accent" />
+                  <h3 className="text-base font-semibold text-ink-900">Spawn teammate</h3>
                 </div>
 
-                <label className="flex items-center gap-2 rounded-lg border border-ink-900/10 bg-surface-cream px-3 py-2 text-sm text-ink-700 md:self-end">
-                  <input
-                    type="checkbox"
-                    checked={spawnForm.memfsEnabled}
-                    onChange={(event) => setSpawnForm((current) => ({ ...current, memfsEnabled: event.target.checked }))}
-                    className="h-4 w-4 rounded border-ink-900/20 text-accent focus:ring-accent/50"
-                  />
-                  Enable memfs
-                </label>
-              </div>
+                <form className="space-y-3" onSubmit={handleSpawn}>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Name</label>
+                    <Input
+                      value={spawnForm.name}
+                      onChange={(event) => setSpawnForm((current) => ({ ...current, name: event.target.value }))}
+                      placeholder="researcher"
+                    />
+                  </div>
 
-              <Button type="submit" className="w-full" isLoading={operations.spawning} disabled={!configured}>
-                Spawn teammate
-              </Button>
-            </form>
-          </section>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Role</label>
+                    <textarea
+                      value={spawnForm.role}
+                      onChange={(event) => setSpawnForm((current) => ({ ...current, role: event.target.value }))}
+                      placeholder="Investigates implementation details and reports findings."
+                      className="min-h-24 w-full rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-sm text-ink-900 outline-none transition-colors placeholder:text-ink-400 focus:ring-2 focus:ring-accent/50"
+                    />
+                  </div>
 
-          <section className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
-            <div className="mb-4 flex items-center gap-2">
-              <Send className="h-4 w-4 text-accent" />
-              <h3 className="text-base font-semibold text-ink-900">Dispatch task</h3>
-            </div>
-
-            <form className="space-y-3" onSubmit={handleDispatch}>
-              <div>
-                <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Target</label>
-                <Input
-                  value={dispatchForm.target}
-                  onChange={(event) => setDispatchForm((current) => ({ ...current, target: event.target.value }))}
-                  placeholder="researcher or researcher/memory"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Message</label>
-                <textarea
-                  value={dispatchForm.message}
-                  onChange={(event) => setDispatchForm((current) => ({ ...current, message: event.target.value }))}
-                  placeholder="Investigate why the build is failing and report back with root cause."
-                  className="min-h-28 w-full rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-sm text-ink-900 outline-none transition-colors placeholder:text-ink-400 focus:ring-2 focus:ring-accent/50"
-                />
-              </div>
-
-              <div className="rounded-xl border border-ink-900/10 bg-surface-cream/70 p-4">
-                <label className="flex items-center gap-2 text-sm font-medium text-ink-800">
-                  <input
-                    type="checkbox"
-                    checked={dispatchForm.reviewEnabled}
-                    onChange={(event) => setDispatchForm((current) => ({
-                      ...current,
-                      reviewEnabled: event.target.checked,
-                      reviewer: event.target.checked ? current.reviewer : '',
-                    }))}
-                    className="h-4 w-4 rounded border-ink-900/20 text-accent focus:ring-accent/50"
-                  />
-                  Require review for this dispatch
-                </label>
-
-                {dispatchForm.reviewEnabled && (
-                  <div className="mt-4 space-y-3">
+                  <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
                     <div>
-                      <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Reviewer</label>
-                      <select
-                        value={dispatchForm.reviewer}
-                        onChange={(event) => setDispatchForm((current) => ({ ...current, reviewer: event.target.value }))}
-                        className="w-full rounded-lg border border-ink-900/10 bg-white px-3 py-2 text-sm text-ink-900 outline-none focus:ring-2 focus:ring-accent/50"
-                      >
-                        <option value="">Select reviewer</option>
-                        {reviewTargetOptions.map((option) => (
-                          <option key={option} value={option}>
-                            {option}
-                          </option>
-                        ))}
-                      </select>
+                      <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Model (optional)</label>
+                      <Input
+                        value={spawnForm.model}
+                        onChange={(event) => setSpawnForm((current) => ({ ...current, model: event.target.value }))}
+                        placeholder="anthropic/claude-sonnet-4"
+                      />
                     </div>
 
-                    <div>
-                      <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Review gate</label>
-                      <select
-                        value={dispatchForm.reviewGate}
+                    <label className="flex items-center gap-2 rounded-lg border border-ink-900/10 bg-surface-cream px-3 py-2 text-sm text-ink-700 md:self-end">
+                      <input
+                        type="checkbox"
+                        checked={spawnForm.memfsEnabled}
+                        onChange={(event) => setSpawnForm((current) => ({ ...current, memfsEnabled: event.target.checked }))}
+                        className="h-4 w-4 rounded border-ink-900/20 text-accent focus:ring-accent/50"
+                      />
+                      Enable memfs
+                    </label>
+                  </div>
+
+                  <Button type="submit" className="w-full" isLoading={operations.spawning} disabled={!configured}>
+                    Spawn teammate
+                  </Button>
+                </form>
+              </section>
+
+              <section className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
+                <div className="mb-4 flex items-center gap-2">
+                  <Send className="h-4 w-4 text-accent" />
+                  <h3 className="text-base font-semibold text-ink-900">Dispatch task</h3>
+                </div>
+
+                <form className="space-y-3" onSubmit={handleDispatch}>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Target</label>
+                    <Input
+                      value={dispatchForm.target}
+                      onChange={(event) => setDispatchForm((current) => ({ ...current, target: event.target.value }))}
+                      placeholder="researcher or researcher/memory"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Message</label>
+                    <textarea
+                      value={dispatchForm.message}
+                      onChange={(event) => setDispatchForm((current) => ({ ...current, message: event.target.value }))}
+                      placeholder="Investigate why the build is failing and report back with root cause."
+                      className="min-h-28 w-full rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-sm text-ink-900 outline-none transition-colors placeholder:text-ink-400 focus:ring-2 focus:ring-accent/50"
+                    />
+                  </div>
+
+                  <div className="rounded-xl border border-ink-900/10 bg-surface-cream/70 p-4">
+                    <label className="flex items-center gap-2 text-sm font-medium text-ink-800">
+                      <input
+                        type="checkbox"
+                        checked={dispatchForm.reviewEnabled}
                         onChange={(event) => setDispatchForm((current) => ({
                           ...current,
-                          reviewGate: event.target.value as 'on_success' | 'always',
+                          reviewEnabled: event.target.checked,
+                          reviewer: event.target.checked ? current.reviewer : '',
                         }))}
-                        className="w-full rounded-lg border border-ink-900/10 bg-white px-3 py-2 text-sm text-ink-900 outline-none focus:ring-2 focus:ring-accent/50"
-                      >
-                        <option value="on_success">Review on success</option>
-                        <option value="always">Always review</option>
-                      </select>
-                    </div>
+                        className="h-4 w-4 rounded border-ink-900/20 text-accent focus:ring-accent/50"
+                      />
+                      Require review for this dispatch
+                    </label>
 
-                    <p className="text-xs text-ink-600">
-                      {getReviewGateHelpText(dispatchForm.reviewGate)}
+                    {dispatchForm.reviewEnabled && (
+                      <div className="mt-4 space-y-3">
+                        <div>
+                          <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Reviewer</label>
+                          <select
+                            value={dispatchForm.reviewer}
+                            onChange={(event) => setDispatchForm((current) => ({ ...current, reviewer: event.target.value }))}
+                            className="w-full rounded-lg border border-ink-900/10 bg-white px-3 py-2 text-sm text-ink-900 outline-none focus:ring-2 focus:ring-accent/50"
+                          >
+                            <option value="">Select reviewer</option>
+                            {reviewTargetOptions.map((option) => (
+                              <option key={option} value={option}>
+                                {option}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Review gate</label>
+                          <select
+                            value={dispatchForm.reviewGate}
+                            onChange={(event) => setDispatchForm((current) => ({
+                              ...current,
+                              reviewGate: event.target.value as 'on_success' | 'always',
+                            }))}
+                            className="w-full rounded-lg border border-ink-900/10 bg-white px-3 py-2 text-sm text-ink-900 outline-none focus:ring-2 focus:ring-accent/50"
+                          >
+                            <option value="on_success">Review on success</option>
+                            <option value="always">Always review</option>
+                          </select>
+                        </div>
+
+                        <p className="text-xs text-ink-600">
+                          {getReviewGateHelpText(dispatchForm.reviewGate)}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  <Button type="submit" className="w-full" isLoading={operations.dispatching} disabled={!configured}>
+                    {dispatchForm.reviewEnabled ? 'Dispatch with review' : 'Dispatch task'}
+                  </Button>
+                </form>
+              </section>
+            </div>
+
+            <section className="overflow-hidden rounded-2xl border border-ink-900/10 bg-white/80 shadow-sm backdrop-blur-sm">
+              <div className="border-b border-ink-900/10 px-5 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-base font-semibold text-ink-900">Task monitoring</h3>
+                    <p className="text-sm text-ink-600">
+                      Track active work, inspect teammate execution state, and follow task outcomes in one place.
                     </p>
                   </div>
-                )}
-              </div>
-
-              <Button type="submit" className="w-full" isLoading={operations.dispatching} disabled={!configured}>
-                {dispatchForm.reviewEnabled ? 'Dispatch with review' : 'Dispatch task'}
-              </Button>
-            </form>
-          </section>
-        </div>
-
-        <section className="overflow-hidden rounded-2xl border border-ink-900/10 bg-white/80 shadow-sm backdrop-blur-sm">
-          <div className="border-b border-ink-900/10 px-5 py-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h3 className="text-base font-semibold text-ink-900">Task monitoring</h3>
-                <p className="text-sm text-ink-600">
-                  Track active work, inspect teammate execution state, and follow task outcomes in one place.
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2 text-xs">
-                <span className="rounded-full bg-surface-cream px-2.5 py-1 font-medium text-ink-600">
-                  {trackedTaskIds.length} live follows
-                </span>
-                <span className="rounded-full bg-surface-cream px-2.5 py-1 font-medium text-ink-600">
-                  {activeTaskCount} active tasks
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="h-[760px]">
-            <SplitPaneGroup orientation="horizontal" defaultLayout={[34, 66]} storageKey="teams-monitoring-pane">
-              <SplitPanePanel minSize={28} defaultSize={34}>
-                <TeamsSidebar
-                  teammates={teammates}
-                  tasks={tasks}
-                  trackedTaskIds={trackedTaskIds}
-                  selectedEntityType={selectedEntityType}
-                  selectedTaskId={selectedTaskId}
-                  selectedTeammateName={selectedTeammateName}
-                  taskFilter={taskFilter}
-                  onSelectTeammate={selectTeammate}
-                  onSelectTask={selectTask}
-                  onSetTaskFilter={setTaskFilter}
-                  onDispatchTarget={handleDispatchTarget}
-                />
-              </SplitPanePanel>
-              <SplitPaneDivider orientation="horizontal" />
-              <SplitPanePanel minSize={40} defaultSize={66}>
-                {selectedEntityType === 'task' && selectedTask ? (
-                  <TeamsTaskDetail
-                    task={selectedTask}
-                    allTasks={tasks}
-                    tracked={trackedTaskIds.includes(selectedTask.id)}
-                    onCancel={(id) => void cancelTask(id)}
-                    onSelectTeammate={selectTeammate}
-                    onSelectTask={selectTask}
-                  />
-                ) : selectedTeammate ? (
-                  <TeamsTeammateDetail
-                    teammate={selectedTeammate}
-                    onFork={(name) => void handleFork(name)}
-                    onReinit={(name) => void handleReinit(name)}
-                    onDispatchTarget={handleDispatchTarget}
-                    onSelectTask={selectTask}
-                  />
-                ) : (
-                  <div className="flex h-full items-center justify-center bg-surface px-6 py-10 text-center">
-                    <div className="max-w-md space-y-3">
-                      <h4 className="text-lg font-semibold text-ink-900">Nothing selected yet</h4>
-                      <p className="text-sm text-ink-600">
-                        Pick a teammate or task from the left pane to inspect its live state.
-                      </p>
-                    </div>
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    <span className="rounded-full bg-surface-cream px-2.5 py-1 font-medium text-ink-600">
+                      {trackedTaskIds.length} live follows
+                    </span>
+                    <span className="rounded-full bg-surface-cream px-2.5 py-1 font-medium text-ink-600">
+                      {activeTaskCount} active tasks
+                    </span>
                   </div>
-                )}
-              </SplitPanePanel>
-            </SplitPaneGroup>
-          </div>
-        </section>
+                </div>
+              </div>
+
+              <div className="h-[760px]">
+                <SplitPaneGroup orientation="horizontal" defaultLayout={[34, 66]} storageKey="teams-monitoring-pane">
+                  <SplitPanePanel minSize={28} defaultSize={34}>
+                    <TeamsSidebar
+                      teammates={teammates}
+                      tasks={tasks}
+                      trackedTaskIds={trackedTaskIds}
+                      selectedEntityType={selectedEntityType}
+                      selectedTaskId={selectedTaskId}
+                      selectedTeammateName={selectedTeammateName}
+                      taskFilter={taskFilter}
+                      onSelectTeammate={selectTeammate}
+                      onSelectTask={selectTask}
+                      onSetTaskFilter={setTaskFilter}
+                      onDispatchTarget={handleDispatchTarget}
+                    />
+                  </SplitPanePanel>
+                  <SplitPaneDivider orientation="horizontal" />
+                  <SplitPanePanel minSize={40} defaultSize={66}>
+                    {selectedEntityType === 'task' && selectedTask ? (
+                      <TeamsTaskDetail
+                        task={selectedTask}
+                        allTasks={tasks}
+                        tracked={trackedTaskIds.includes(selectedTask.id)}
+                        onCancel={(id) => void cancelTask(id)}
+                        onSelectTeammate={selectTeammate}
+                        onSelectTask={selectTask}
+                      />
+                    ) : selectedTeammate ? (
+                      <TeamsTeammateDetail
+                        teammate={selectedTeammate}
+                        onFork={(name) => void handleFork(name)}
+                        onReinit={(name) => void handleReinit(name)}
+                        onDispatchTarget={handleDispatchTarget}
+                        onSelectTask={selectTask}
+                      />
+                    ) : (
+                      <div className="flex h-full items-center justify-center bg-surface px-6 py-10 text-center">
+                        <div className="max-w-md space-y-3">
+                          <h4 className="text-lg font-semibold text-ink-900">Nothing selected yet</h4>
+                          <p className="text-sm text-ink-600">
+                            Pick a teammate or task from the left pane to inspect its live state.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </SplitPanePanel>
+                </SplitPaneGroup>
+              </div>
+            </section>
+          </TabsContent>
+
+          <TabsContent value="councils" className="mt-6">
+            <TeamsCouncilsView
+              teammates={teammates}
+              sessions={councilSessions}
+              selectedSessionId={selectedCouncilSessionId}
+              selectedSessionDetail={selectedCouncilSessionDetail}
+              isStartingCouncil={operations.startingCouncil}
+              isRefreshingCouncils={operations.councilRefreshing}
+              onRefreshCouncils={() => void refreshCouncils()}
+              onSelectCouncilSession={(sessionId) => void selectCouncilSession(sessionId)}
+              onStartCouncil={async (input) => {
+                await startCouncil(input);
+              }}
+            />
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
   );
