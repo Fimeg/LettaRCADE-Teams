@@ -8,6 +8,7 @@ import { isTaskActive, useTeamsStore } from '../store/useTeamsStore';
 import { TeamsSidebar } from './teams/TeamsSidebar';
 import { TeamsTaskDetail } from './teams/TeamsTaskDetail';
 import { TeamsTeammateDetail } from './teams/TeamsTeammateDetail';
+import { getReviewGateHelpText } from './teams/utils';
 
 const daemonStatusClasses: Record<string, string> = {
   stopped: 'bg-slate-100 text-slate-700',
@@ -60,6 +61,9 @@ export function TeamsView() {
   const [dispatchForm, setDispatchForm] = useState({
     target: '',
     message: '',
+    reviewEnabled: false,
+    reviewer: '',
+    reviewGate: 'on_success' as 'on_success' | 'always',
   });
 
   useEffect(() => {
@@ -94,6 +98,16 @@ export function TeamsView() {
     () => teammates.find((teammate) => teammate.name === selectedTeammateName) ?? null,
     [teammates, selectedTeammateName],
   );
+  const reviewTargetOptions = useMemo(() => {
+    const options = new Set<string>();
+
+    teammates.forEach((teammate) => {
+      options.add(teammate.name);
+      teammate.targets?.forEach((target) => options.add(target.name));
+    });
+
+    return Array.from(options).sort((a, b) => a.localeCompare(b));
+  }, [teammates]);
 
   const handleApplyProjectDir = async () => {
     if (!projectDirInput.trim()) return;
@@ -122,13 +136,39 @@ export function TeamsView() {
   const handleDispatch = async (event: FormEvent) => {
     event.preventDefault();
 
+    const target = dispatchForm.target.trim();
+    const message = dispatchForm.message.trim();
+    const reviewer = dispatchForm.reviewer.trim();
+
     const input: DispatchTaskInput = {
-      target: dispatchForm.target.trim(),
-      message: dispatchForm.message.trim(),
+      target,
+      message,
     };
 
     if (!input.target || !input.message) {
       return;
+    }
+
+    if (dispatchForm.reviewEnabled) {
+      if (!reviewer) {
+        return;
+      }
+
+      input.options = {
+        pipelineId: (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+          ? `pipeline-${crypto.randomUUID()}`
+          : `pipeline-${Date.now()}`,
+        review: {
+          reviewer,
+          gate: dispatchForm.reviewGate,
+          assignments: [
+            {
+              name: target,
+              message,
+            },
+          ],
+        },
+      };
     }
 
     await dispatchTask(input);
@@ -342,8 +382,64 @@ export function TeamsView() {
                   className="min-h-28 w-full rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-sm text-ink-900 outline-none transition-colors placeholder:text-ink-400 focus:ring-2 focus:ring-accent/50"
                 />
               </div>
+
+              <div className="rounded-xl border border-ink-900/10 bg-surface-cream/70 p-4">
+                <label className="flex items-center gap-2 text-sm font-medium text-ink-800">
+                  <input
+                    type="checkbox"
+                    checked={dispatchForm.reviewEnabled}
+                    onChange={(event) => setDispatchForm((current) => ({
+                      ...current,
+                      reviewEnabled: event.target.checked,
+                      reviewer: event.target.checked ? current.reviewer : '',
+                    }))}
+                    className="h-4 w-4 rounded border-ink-900/20 text-accent focus:ring-accent/50"
+                  />
+                  Require review for this dispatch
+                </label>
+
+                {dispatchForm.reviewEnabled && (
+                  <div className="mt-4 space-y-3">
+                    <div>
+                      <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Reviewer</label>
+                      <select
+                        value={dispatchForm.reviewer}
+                        onChange={(event) => setDispatchForm((current) => ({ ...current, reviewer: event.target.value }))}
+                        className="w-full rounded-lg border border-ink-900/10 bg-white px-3 py-2 text-sm text-ink-900 outline-none focus:ring-2 focus:ring-accent/50"
+                      >
+                        <option value="">Select reviewer</option>
+                        {reviewTargetOptions.map((option) => (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Review gate</label>
+                      <select
+                        value={dispatchForm.reviewGate}
+                        onChange={(event) => setDispatchForm((current) => ({
+                          ...current,
+                          reviewGate: event.target.value as 'on_success' | 'always',
+                        }))}
+                        className="w-full rounded-lg border border-ink-900/10 bg-white px-3 py-2 text-sm text-ink-900 outline-none focus:ring-2 focus:ring-accent/50"
+                      >
+                        <option value="on_success">Review on success</option>
+                        <option value="always">Always review</option>
+                      </select>
+                    </div>
+
+                    <p className="text-xs text-ink-600">
+                      {getReviewGateHelpText(dispatchForm.reviewGate)}
+                    </p>
+                  </div>
+                )}
+              </div>
+
               <Button type="submit" className="w-full" isLoading={operations.dispatching} disabled={!configured}>
-                Dispatch task
+                {dispatchForm.reviewEnabled ? 'Dispatch with review' : 'Dispatch task'}
               </Button>
             </form>
           </section>
@@ -391,6 +487,7 @@ export function TeamsView() {
                 {selectedEntityType === 'task' && selectedTask ? (
                   <TeamsTaskDetail
                     task={selectedTask}
+                    allTasks={tasks}
                     tracked={trackedTaskIds.includes(selectedTask.id)}
                     onCancel={(id) => void cancelTask(id)}
                     onSelectTeammate={selectTeammate}
