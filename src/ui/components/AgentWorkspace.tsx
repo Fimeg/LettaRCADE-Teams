@@ -13,6 +13,7 @@ import { MessageCard } from "./EventCard";
 import MDContent from "../render/markdown";
 import { AgentMemoryPanel } from "./AgentMemoryPanel";
 import { ToolStatusProvider } from "../contexts";
+import { ToolApprovalDialog } from "./ToolApprovalDialog";
 import ConnectionModeIndicator, { ConnectionMode } from "./ConnectionModeIndicator";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { useAgentNickname } from "../hooks/useAgentNickname";
@@ -334,8 +335,39 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
 
   useIPC(onEvent);
 
-  // Permission requests (managed via IPC/events)
-  const permissionRequests: any[] = [];
+  // ── Permission requests (tool approval UI) ────────────────────────────────
+  // Read the active session's pending permission requests from the store.
+  // The latest request drives the ToolApprovalDialog.
+  const sessions = useAppStore((s) => s.sessions);
+  const resolvePermissionRequest = useAppStore((s) => s.resolvePermissionRequest);
+  const activeSession = activeConversationId ? sessions[activeConversationId] : undefined;
+  const permissionRequests = activeSession?.permissionRequests ?? [];
+
+  // Latest unresolved request drives the modal
+  const latestPermissionRequest = permissionRequests.length > 0
+    ? permissionRequests[permissionRequests.length - 1]
+    : null;
+
+  const handlePermissionResponse = useCallback((allow: boolean) => {
+    if (!latestPermissionRequest) return;
+    const { toolUseId } = latestPermissionRequest;
+    // Remove the request from store immediately so the dialog closes
+    if (activeConversationId) {
+      resolvePermissionRequest(activeConversationId, toolUseId);
+    }
+    // Send the IPC response
+    sendEvent({
+      type: "permission.response",
+      payload: {
+        sessionId: activeConversationId ?? "",
+        toolUseId,
+        result: allow
+          ? { behavior: "allow" as const }
+          : { behavior: "deny" as const, message: "Denied by user" },
+      },
+    });
+  }, [latestPermissionRequest, activeConversationId, resolvePermissionRequest, sendEvent]);
+
   const isRunning = isStreaming;
 
   const {
@@ -1490,6 +1522,12 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
         busy={convDeleting}
         onConfirm={handleDeleteConversation}
         onCancel={() => !convDeleting && setConvDeleteId(null)}
+      />
+
+      {/* Tool approval dialog — agent wants to execute a local tool */}
+      <ToolApprovalDialog
+        request={latestPermissionRequest}
+        onRespond={handlePermissionResponse}
       />
 
       {/* Save-diff preview */}

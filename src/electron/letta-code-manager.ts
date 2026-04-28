@@ -52,6 +52,9 @@ function resolveCliPath(): string {
   const override = process.env.LETTA_CODE_CLI_PATH?.trim();
   const candidates: string[] = [];
   if (override) candidates.push(override);
+  // Add custom dev build path with memfs support (checked first)
+  candidates.push("/home/casey/Projects/letta-code/letta.js");
+  // Then check node_modules locations
   candidates.push(
     path.join(app.getAppPath(), "node_modules", CLI_MODULE),
     path.join(process.cwd(), "node_modules", CLI_MODULE),
@@ -139,10 +142,12 @@ export class LettaCodeManager extends EventEmitter {
     console.log(`[letta-code]   ELECTRON_RUN_AS_NODE: ${spawnEnv.ELECTRON_RUN_AS_NODE}`);
     console.log(`[letta-code]   CI: ${spawnEnv.CI}`);
 
-    const child = spawn(process.execPath, [cliPath], {
+    // Use 'node' to spawn the CLI, not process.execPath (which is Electron)
+    // This is critical - the CLI needs to run as a Node.js TUI process
+    const child = spawn('node', [cliPath], {
       cwd: opts.cwd ?? process.cwd(),
       env: spawnEnv,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],  // Connect stdin for TUI interaction
     });
 
     this.child = child;

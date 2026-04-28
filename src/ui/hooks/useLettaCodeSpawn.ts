@@ -71,6 +71,11 @@ export function useLettaCodeSpawn() {
       let serverUrl = opts?.serverUrl;
       let apiKey = opts?.apiKey;
 
+      console.log("[useLettaCodeSpawn] Initial opts:", {
+        serverUrl: serverUrl ? "(provided)" : "(not provided)",
+        apiKey: apiKey ? "(provided)" : "(not provided)",
+      });
+
       if (!serverUrl) {
         try {
           serverUrl = localStorage.getItem("letta_api_url") || undefined;
@@ -84,8 +89,9 @@ export function useLettaCodeSpawn() {
 
       const fullOpts = { ...opts, serverUrl, apiKey };
       console.log("[useLettaCodeSpawn] Calling api.spawn with opts:", {
-        ...fullOpts,
-        apiKey: apiKey ? "(set)" : "(unset)",
+        serverUrl: fullOpts.serverUrl,
+        apiKey: fullOpts.apiKey ? "(set)" : "(unset)",
+        agentId: fullOpts.agentId,
       });
 
       try {

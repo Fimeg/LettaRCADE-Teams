@@ -31,6 +31,7 @@ type RuntimeEnv = {
     LETTA_CODE_CLI_PATH?: string;
     LETTA_MEMFS_LOCAL?: string;
     LETTA_MEMFS_GIT_URL?: string;
+    LETTA_API_KEY?: string;
     /** True iff LETTA_API_KEY is set (value not exposed). */
     apiKeySet: boolean;
     /** True iff LETTA_MEMFS_GIT_TOKEN is set (value not exposed). */

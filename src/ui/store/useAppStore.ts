@@ -83,6 +83,8 @@ export type PermissionRequest = {
   toolUseId: string;
   toolName: string;
   input: unknown;
+  /** When the request was created (epoch ms). Used for timeout display. */
+  createdAt?: number;
 };
 
 /**
@@ -916,7 +918,7 @@ export const useAppStore = create<AppState>((set, get) => ({
               ...state.sessions,
               [sessionId]: {
                 ...existing,
-                permissionRequests: [...existing.permissionRequests, { toolUseId, toolName, input }]
+                permissionRequests: [...existing.permissionRequests, { toolUseId, toolName, input, createdAt: Date.now() }]
               }
             }
           };

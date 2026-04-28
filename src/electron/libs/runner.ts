@@ -8,6 +8,12 @@ import {
   type SendMessage,
   type MessageContentItem,
 } from "@letta-ai/letta-code-sdk";
+
+/**
+ * Extended canUseTool that receives the conversationId so callers can
+ * correlate tool approval requests to the right session for UI broadcasts.
+ */
+export type CanUseToolWithSession = (conversationId: string, toolName: string, toolInput: Record<string, unknown>) => Promise<CanUseToolResponse>;
 import type { ServerEvent, SessionStatus } from "../types.js";
 import type { PendingPermission } from "./runtime-state.js";
 
@@ -46,12 +52,15 @@ const DEFAULT_CWD = process.cwd();
 export class SessionManager {
   private sessions = new Map<string, LettaSession>();
   private onEvent: (event: ServerEvent) => void;
-  private canUseTool?: CanUseToolCallback;
+  private canUseTool?: CanUseToolWithSession;
   private permissionMode: "bypassPermissions" | "default";
+  /** Set before each send() so the wrapped canUseTool callback knows which
+   *  conversation the tool belongs to. */
+  private currentApprovalConversationId = "";
 
   constructor(options: {
     onEvent: (event: ServerEvent) => void;
-    canUseTool?: CanUseToolCallback;
+    canUseTool?: CanUseToolWithSession;
     permissionMode?: "bypassPermissions" | "default";
   }) {
     this.onEvent = options.onEvent;
@@ -59,11 +68,21 @@ export class SessionManager {
     this.permissionMode = options.permissionMode ?? "bypassPermissions";
   }
 
+  /** Wrap the extended callback into the SDK's CanUseToolCallback shape,
+   *  capturing the current conversation ID at call time. */
+  private getWrappedCallback(): CanUseToolCallback | undefined {
+    if (!this.canUseTool) return undefined;
+    const cb = this.canUseTool;
+    return (toolName: string, toolInput: Record<string, unknown>) => {
+      return cb(this.currentApprovalConversationId, toolName, toolInput);
+    };
+  }
+
   /** Create a new conversation session on the given (or default) agent. */
   async create(agentId?: string): Promise<{ conversationId: string; agentId: string }> {
     const session = createSession(agentId, {
       permissionMode: this.permissionMode,
-      canUseTool: this.canUseTool,
+      canUseTool: this.getWrappedCallback(),
       cwd: DEFAULT_CWD,
       includePartialMessages: true,
     });
@@ -72,6 +91,7 @@ export class SessionManager {
     // we can capture the conversationId before the UI sends messages.
     const init = await session.initialize();
     const conversationId = init.conversationId;
+    this.currentApprovalConversationId = conversationId;
 
     this.sessions.set(conversationId, session);
 
@@ -84,9 +104,10 @@ export class SessionManager {
   async ensure(conversationId: string): Promise<void> {
     if (this.sessions.has(conversationId)) return;
 
+    this.currentApprovalConversationId = conversationId;
     const session = resumeSession(conversationId, {
       permissionMode: this.permissionMode,
-      canUseTool: this.canUseTool,
+      canUseTool: this.getWrappedCallback(),
       cwd: DEFAULT_CWD,
       includePartialMessages: true,
     });
@@ -103,6 +124,7 @@ export class SessionManager {
       throw new Error(`No session found for conversation: ${conversationId}`);
     }
 
+    this.currentApprovalConversationId = conversationId;
     this.emitStreamUserPrompt(conversationId, prompt);
 
     // Convert to SDK SendMessage format

@@ -2,6 +2,7 @@ import { BrowserWindow } from "electron";
 import type { ClientEvent, ServerEvent } from "./types.js";
 import { SessionManager } from "./libs/runner.js";
 import type { CanUseToolResponse } from "@letta-ai/letta-code-sdk";
+import type { CanUseToolWithSession } from "./libs/runner.js";
 
 const DEBUG = process.env.DEBUG_IPC === "true";
 
@@ -27,29 +28,48 @@ function broadcast(event: ServerEvent) {
   }
 }
 
+// ── Tool Approval Resolver Map ────────────────────────────────────────
+// When canUseTool fires, we broadcast a permission.request to the UI and
+// store the resolve function. The UI responds with permission.response,
+// which calls the stored resolver.
+let toolUseIdCounter = 0;
+const pendingResolvers = new Map<string, (response: CanUseToolResponse) => void>();
+
 // ── Session Manager ─────────────────────────────────────────────────────────
-// Persistent SDK sessions keyed by conversation ID.  The CLI subprocess stays
-// alive across send/stream cycles so the tool harness (bash, read, write, etc.)
-// remains available for every turn.
-//
-// When canUseTool is provided, it is called for every tool the agent invokes.
-// Return { behavior: "allow" } to auto-approve, { behavior: "deny", message }
-// to reject.  AskUserQuestion always requires user input (so it prompts even
-// in bypassPermissions mode).
-const canUseTool = async (toolName: string, input: unknown): Promise<CanUseToolResponse> => {
-  // For now, auto-allow everything.  The UI can surface approval dialogs by
-  // emitting permission.request events and resolving via permission.response.
+const canUseTool: CanUseToolWithSession = async (conversationId, toolName, toolInput): Promise<CanUseToolResponse> => {
+  // AskUserQuestion always requires runtime user input we can't surface yet
   if (toolName === "AskUserQuestion") {
-    // Future: emit permission.request and wait for response
     return { behavior: "deny", message: "AskUserQuestion not yet supported in the UI" };
   }
-  return { behavior: "allow" };
+
+  const toolUseId = `tool-${++toolUseIdCounter}`;
+  const sessionId = conversationId;
+
+  return new Promise<CanUseToolResponse>((resolve) => {
+    pendingResolvers.set(toolUseId, resolve);
+
+    broadcast({
+      type: "permission.request",
+      payload: { sessionId, toolUseId, toolName, input: toolInput },
+    });
+
+    // Timeout: if the UI doesn't respond within 120s, deny automatically.
+    setTimeout(() => {
+      const resolver = pendingResolvers.get(toolUseId);
+      if (resolver) {
+        pendingResolvers.delete(toolUseId);
+        resolver({ behavior: "deny", message: "Tool approval timed out" });
+      }
+    }, 120_000);
+  });
 };
 
 const sessionManager = new SessionManager({
   onEvent: broadcast,
   canUseTool,
-  permissionMode: "bypassPermissions",
+  // Don't use bypassPermissions — we want canUseTool to be called so the
+  // UI can show an approval dialog for each tool.
+  permissionMode: "default",
 });
 
 export async function handleClientEvent(event: ClientEvent) {
@@ -126,11 +146,18 @@ export async function handleClientEvent(event: ClientEvent) {
     return;
   }
 
-  // ── Permission response (future: tool approval UI) ──────────────────────
+  // ── Permission response (tool approval from UI dialog) ───────────────────
   if (event.type === "permission.response") {
-    // PendingPermission handling is managed inside SessionManager's canUseTool
-    // callback.  When a tool approval dialog is surfaced, the UI responds here.
-    debug("permission.response", event.payload);
+    const { sessionId, toolUseId, result } = event.payload;
+    debug("permission.response", { sessionId, toolUseId, behavior: result.behavior });
+
+    const resolver = pendingResolvers.get(toolUseId);
+    if (resolver) {
+      pendingResolvers.delete(toolUseId);
+      resolver(result);
+    } else {
+      log("permission.response: no pending resolver for", { toolUseId });
+    }
     return;
   }
 }

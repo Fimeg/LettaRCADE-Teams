@@ -10,15 +10,22 @@
 import { useState, useEffect } from "react";
 import { useLettaCodeSpawn } from "../hooks/useLettaCodeSpawn";
 import { useAppStore } from "../store/useAppStore";
-import { getApiKey } from "../services/api";
+import { getApiKeyAsync } from "../services/api";
 
-export type ConnectionMode = "server" | "local" | "remote";
+export type ConnectionMode = "server" | "local" | "remote" | "teleport";
+
+// Persistence keys
+const MODE_STORAGE_KEY = "letta:connection-mode";
+const REMOTE_URL_STORAGE_KEY = "letta:remote-server-url";
 
 interface Props {
-  mode: ConnectionMode;
-  onModeChange: (mode: ConnectionMode) => void;
-  /** For Remote mode: the user-configured remote server URL */
+  /** Controlled mode - if not provided, component manages its own state */
+  mode?: ConnectionMode;
+  /** Controlled mode change handler */
+  onModeChange?: (mode: ConnectionMode) => void;
+  /** For Remote mode: the user-configured remote server URL (controlled) */
   remoteUrl?: string;
+  /** Controlled remote URL change handler */
   onRemoteUrlChange?: (url: string) => void;
   /** Agent the spawn is associated with. Used to (a) substitute `{agentId}` in
    *  the operator's memfs URL template and (b) read any per-agent metadata
@@ -27,15 +34,56 @@ interface Props {
 }
 
 export default function ConnectionModeIndicator({
-  mode,
-  onModeChange,
-  remoteUrl,
-  onRemoteUrlChange,
+  mode: controlledMode,
+  onModeChange: controlledOnModeChange,
+  remoteUrl: controlledRemoteUrl,
+  onRemoteUrlChange: controlledOnRemoteUrlChange,
   agentId,
 }: Props) {
   const { available, status, spawn, stop } = useLettaCodeSpawn();
   const agent = useAppStore((s) => (agentId ? s.agents[agentId] : null));
   const [spawnError, setSpawnError] = useState<string | null>(null);
+
+  // Uncontrolled state with persistence - default to LOCAL mode
+  const [internalMode, setInternalMode] = useState<ConnectionMode>("local");
+  const [internalRemoteUrl, setInternalRemoteUrl] = useState<string>("");
+
+  // Determine if controlled or uncontrolled
+  const isControlled = controlledMode !== undefined;
+  const mode = isControlled ? controlledMode : internalMode;
+  const remoteUrl = isControlled ? controlledRemoteUrl : internalRemoteUrl;
+  const onModeChange = isControlled ? controlledOnModeChange : setInternalMode;
+  const onRemoteUrlChange = isControlled ? controlledOnRemoteUrlChange : setInternalRemoteUrl;
+
+  // Load persisted state on mount
+  useEffect(() => {
+    if (isControlled) return; // Don't load if controlled
+
+    try {
+      const savedMode = localStorage.getItem(MODE_STORAGE_KEY) as ConnectionMode | null;
+      const savedRemoteUrl = localStorage.getItem(REMOTE_URL_STORAGE_KEY);
+      if (savedMode && ["server", "local", "remote"].includes(savedMode)) {
+        setInternalMode(savedMode);
+      }
+      if (savedRemoteUrl) {
+        setInternalRemoteUrl(savedRemoteUrl);
+      }
+    } catch {
+      // Ignore localStorage errors (privacy mode, etc.)
+    }
+  }, [isControlled]);
+
+  // Persist state changes
+  useEffect(() => {
+    if (isControlled) return;
+
+    try {
+      localStorage.setItem(MODE_STORAGE_KEY, internalMode);
+      localStorage.setItem(REMOTE_URL_STORAGE_KEY, internalRemoteUrl);
+    } catch {
+      // Ignore localStorage errors
+    }
+  }, [internalMode, internalRemoteUrl, isControlled]);
 
   // Log status changes for debugging
   useEffect(() => {
@@ -44,6 +92,16 @@ export default function ConnectionModeIndicator({
 
   const localDisabled = !available;
   const spawnState = status.status;
+
+  // Auto-spawn CLI when agent loads in local mode
+  useEffect(() => {
+    if (mode === "local" && agentId && spawnState === "stopped" && !spawnError) {
+      console.log("[ConnectionModeIndicator] Auto-spawning CLI for agent:", agentId);
+      handleSpawnToggle().catch((err) => {
+        console.error("[ConnectionModeIndicator] Auto-spawn failed:", err);
+      });
+    }
+  }, [mode, agentId, spawnState, spawnError]);
 
   const statusDotClass = (() => {
     switch (spawnState) {
@@ -62,10 +120,49 @@ export default function ConnectionModeIndicator({
   const handleSwitch = async (next: ConnectionMode) => {
     if (next === mode) return;
     if (next === "local" && localDisabled) return;
-    onModeChange(next);
+    onModeChange?.(next);
     // Stop local spawn when switching away from local mode
     if (mode === "local" && spawnState === "running") {
       await stop();
+    }
+  };
+
+  // Get server URL based on current mode
+  const getServerUrl = async (): Promise<string> => {
+    // First, try to get from localStorage (user-configured)
+    let baseUrl = "";
+    try {
+      baseUrl = localStorage.getItem("letta_api_url") || "";
+    } catch {
+      // ignore
+    }
+    
+    // If not in localStorage, try to get from main process env (for Electron)
+    if (!baseUrl && typeof window !== 'undefined' && window.electron?.getRuntimeEnv) {
+      try {
+        const env = await window.electron.getRuntimeEnv();
+        baseUrl = env.LETTA_BASE_URL || "";
+      } catch (err) {
+        console.error("[ConnectionModeIndicator] Failed to get runtime env:", err);
+      }
+    }
+    
+    // Fallback to default
+    if (!baseUrl) {
+      baseUrl = "http://localhost:8283";
+    }
+
+    switch (mode) {
+      case "local":
+        // For Local mode, the CLI runs on localhost but connects to the upstream server
+        // Use the configured server URL (from localStorage or env) as the upstream target
+        return baseUrl;
+      case "remote":
+        return remoteUrl || "";
+      case "server":
+      default:
+        // For server mode, use the configured API URL
+        return baseUrl;
     }
   };
 
@@ -85,12 +182,20 @@ export default function ConnectionModeIndicator({
           letta_memfs_git_url: typeof md.letta_memfs_git_url === "string" ? md.letta_memfs_git_url : undefined,
           letta_memfs_local: typeof md.letta_memfs_local === "string" ? md.letta_memfs_local : undefined,
         };
-        // Local mode: spawn with localhost URL
+
+        const serverUrl = await getServerUrl();
+        if (!serverUrl) {
+          throw new Error("Server URL not configured");
+        }
+
+        // Get API key asynchronously (checks main process env for Electron)
+        const apiKey = await getApiKeyAsync();
+
         const result = await spawn({
           agentId,
           agentMetadataEnv,
-          serverUrl: "http://localhost:8283",
-          apiKey: getApiKey(),
+          serverUrl,
+          apiKey,
         });
         console.log("[ConnectionModeIndicator] Spawn completed:", result);
       } catch (err) {
@@ -117,7 +222,7 @@ export default function ConnectionModeIndicator({
             Server
           </button>
           <button
-            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 ${
               mode === "local"
                 ? "bg-accent text-white shadow-sm"
                 : "text-ink-600 hover:bg-ink-900/5"
@@ -131,31 +236,32 @@ export default function ConnectionModeIndicator({
             }
           >
             Local
+            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
+            </svg>
           </button>
           <button
-            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-              mode === "remote"
+            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors opacity-50 cursor-not-allowed ${
+              mode === "teleport"
                 ? "bg-accent text-white shadow-sm"
-                : "text-ink-600 hover:bg-ink-900/5"
+                : "text-ink-600"
             }`}
-            onClick={() => handleSwitch("remote")}
-            title="Remote mode: connect to a user-configured remote Letta server"
+            disabled
+            title="Teleport mode: send context to another machine (future feature)"
           >
-            Remote
+            Teleport
           </button>
         </div>
 
         {mode === "local" && (
           <div className="flex items-center gap-2">
             <div className={`w-2 h-2 rounded-full ${statusDotClass}`} title={spawnState} />
-            <span className="text-xs text-ink-600 capitalize">{spawnState}</span>
-            <button
-              onClick={handleSpawnToggle}
-              disabled={spawnState === "starting" || spawnState === "stopping"}
-              className="text-xs px-2 py-1 rounded-md border border-ink-900/10 text-ink-700 hover:bg-ink-900/5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {spawnState === "running" || spawnState === "starting" ? "Stop" : "Start"}
-            </button>
+            <span className="text-xs text-ink-600">
+              {spawnState === "running" ? "Connected" : 
+               spawnState === "starting" ? "Connecting..." : 
+               spawnState === "stopping" ? "Disconnecting..." : 
+               "Disconnected"}
+            </span>
             {(status.error || spawnError) && (
               <div className="flex flex-col gap-1">
                 <span className="text-xs text-red-600 font-semibold">Error:</span>

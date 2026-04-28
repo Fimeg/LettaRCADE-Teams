@@ -87,6 +87,29 @@ export function getApiKey(): string {
   return import.meta.env.LETTA_API_KEY || '';
 }
 
+// Async version that checks main process env for Electron
+export async function getApiKeyAsync(): Promise<string> {
+  if (typeof window !== 'undefined') {
+    const saved = localStorage.getItem('letta_api_key');
+    if (saved) return saved;
+    
+    // For Electron, try to get API key from main process env
+    if (window.electron?.getRuntimeEnv) {
+      try {
+        const env = await window.electron.getRuntimeEnv();
+        if (env.LETTA_API_KEY) {
+          // Cache it for future calls
+          localStorage.setItem('letta_api_key', env.LETTA_API_KEY);
+          return env.LETTA_API_KEY;
+        }
+      } catch (err) {
+        console.error('[getApiKeyAsync] Failed to get runtime env:', err);
+      }
+    }
+  }
+  return import.meta.env.LETTA_API_KEY || '';
+}
+
 export function getLettaClient(): Letta {
   if (!clientInstance) {
     const baseURL = getApiBase();
@@ -445,7 +468,7 @@ export type ProviderCategory = 'base' | 'byok';
 
 export type ProviderType =
   | 'anthropic' | 'azure' | 'baseten' | 'bedrock' | 'cerebras'
-  | 'chatgpt_oauth' | 'deepseek' | 'fireworks' | 'google_ai'
+  | 'chatgpt_oauth' | 'crofai' | 'deepseek' | 'fireworks' | 'google_ai'
   | 'google_vertex' | 'groq' | 'hugging-face' | 'letta'
   | 'lmstudio_openai' | 'minimax' | 'mistral' | 'ollama'
   | 'openai' | 'together' | 'vllm' | 'sglang' | 'openrouter' | 'xai'

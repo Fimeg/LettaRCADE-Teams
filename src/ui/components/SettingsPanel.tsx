@@ -6,6 +6,7 @@ import { FormField } from './ui/composites/FormField';
 import { Input } from './ui/primitives/Input';
 import { Button } from './ui/primitives/Button';
 import { Icon } from './ui/primitives/Icon';
+import { ProviderCard, type ProviderStatusInfo } from './ui/business/ProviderCard';
 import { Cog, FlaskConical, Puzzle, Terminal, Info, Check } from 'lucide-react';
 
 const API_BASE_KEY = 'letta_api_url';
@@ -544,18 +545,26 @@ function ModelDefaultsSection() {
 
 const PROVIDER_TYPES: { value: string; label: string; description: string; needsBaseUrl?: boolean }[] = [
   { value: 'anthropic', label: 'Anthropic (Claude)', description: 'Claude API via Anthropic' },
-  { value: 'openai', label: 'OpenAI', description: 'GPT models via OpenAI API' },
   { value: 'azure', label: 'Azure OpenAI', description: 'Azure-hosted OpenAI models', needsBaseUrl: true },
   { value: 'bedrock', label: 'AWS Bedrock', description: 'Claude via AWS Bedrock', needsBaseUrl: true },
-  { value: 'fireworks', label: 'Fireworks AI', description: 'Fast inference API' },
-  { value: 'groq', label: 'Groq', description: 'Ultra-fast LLM inference' },
-  { value: 'together', label: 'Together AI', description: 'Open models inference' },
+  { value: 'cerebras', label: 'Cerebras', description: 'Cerebras inference API' },
+  { value: 'crofai', label: 'crof.ai', description: 'crof.ai - supports OpenAI and Anthropic endpoints', needsBaseUrl: true },
   { value: 'deepseek', label: 'DeepSeek', description: 'DeepSeek models' },
-  { value: 'xai', label: 'xAI (Grok)', description: 'Grok models via xAI' },
+  { value: 'fireworks', label: 'Fireworks AI', description: 'Fast inference API' },
   { value: 'google_ai', label: 'Google AI (Gemini)', description: 'Gemini models' },
   { value: 'google_vertex', label: 'Google Vertex AI', description: 'Enterprise Google AI', needsBaseUrl: true },
+  { value: 'groq', label: 'Groq', description: 'Ultra-fast LLM inference' },
+  { value: 'hugging-face', label: 'Hugging Face', description: 'HF inference endpoints' },
+  { value: 'letta', label: 'Letta', description: 'Letta-hosted models' },
+  { value: 'lmstudio_openai', label: 'LM Studio (Local)', description: 'Local LM Studio server', needsBaseUrl: true },
+  { value: 'mistral', label: 'Mistral AI', description: 'Mistral models' },
   { value: 'ollama', label: 'Ollama (Local)', description: 'Local models via Ollama', needsBaseUrl: true },
+  { value: 'openai', label: 'OpenAI', description: 'GPT models via OpenAI API' },
+  { value: 'openrouter', label: 'OpenRouter', description: 'Unified API for multiple providers' },
+  { value: 'sglang', label: 'SGLang (Local)', description: 'Local SGLang server', needsBaseUrl: true },
+  { value: 'together', label: 'Together AI', description: 'Open models inference' },
   { value: 'vllm', label: 'vLLM (Local)', description: 'Local vLLM server', needsBaseUrl: true },
+  { value: 'xai', label: 'xAI (Grok)', description: 'Grok models via xAI' },
 ];
 
 interface ProviderFormData {
@@ -1015,61 +1024,32 @@ function ProvidersSection() {
                 BYOK Providers ({byokProviders.length})
               </h3>
               <div className="space-y-2">
-                {byokProviders.map((provider) => (
-                  <div
-                    key={provider.id}
-                    className="flex items-center justify-between p-3 bg-surface border border-ink-900/10 rounded-lg group hover:border-ink-900/20 transition-colors"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-ink-900">{provider.name}</span>
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
-                          {provider.provider_type}
-                        </span>
-                      </div>
-                      <div className="text-xs text-ink-500 mt-1">
-                        Last synced: {formatLastSynced(provider.last_synced)}
-                        {provider.base_url && (
-                          <span className="ml-2 font-mono text-ink-400">{provider.base_url}</span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={() => refreshProvider(provider.id)}
-                        disabled={refreshingId === provider.id}
-                        className="px-2 py-1 rounded text-xs font-medium text-ink-600 hover:bg-ink-50 transition-colors disabled:opacity-50"
-                        title="Refresh model list from provider"
-                      >
-                        {refreshingId === provider.id ? '…' : 'Refresh'}
-                      </button>
-                      <button
-                        onClick={() => {
-                          setEditingProvider(provider);
-                          setIsEditModalOpen(true);
-                        }}
-                        className="p-1.5 rounded text-ink-600 hover:bg-ink-50 transition-colors"
-                        title="Edit provider"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                        </svg>
-                      </button>
-                      <button
-                        onClick={() => {
-                          setDeletingProvider(provider);
-                          setIsDeleteModalOpen(true);
-                        }}
-                        className="p-1.5 rounded text-red-600 hover:bg-red-50 transition-colors"
-                        title="Delete provider"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                {byokProviders.map((provider) => {
+                  const status: ProviderStatusInfo = refreshingId === provider.id
+                    ? { status: 'syncing', message: 'Refreshing models...' }
+                    : !provider.last_synced
+                      ? { status: 'disconnected', message: 'Never synced' }
+                      : { status: 'connected', message: `Last synced: ${formatLastSynced(provider.last_synced)}` };
+
+                  return (
+                    <ProviderCard
+                      key={provider.id}
+                      provider={provider}
+                      status={status}
+                      isRefreshing={refreshingId === provider.id}
+                      onRefresh={() => refreshProvider(provider.id)}
+                      onEdit={(p) => {
+                        setEditingProvider(p);
+                        setIsEditModalOpen(true);
+                      }}
+                      onDelete={(p) => {
+                        setDeletingProvider(p);
+                        setIsDeleteModalOpen(true);
+                      }}
+                      variant="hoverable"
+                    />
+                  );
+                })}
               </div>
             </div>
           )}
@@ -1081,16 +1061,22 @@ function ProvidersSection() {
                 <span className="w-2 h-2 rounded-full bg-green-400" />
                 Base Providers ({baseProviders.length})
               </h3>
-              <div className="flex flex-wrap gap-2">
-                {baseProviders.map((provider) => (
-                  <span
-                    key={provider.id}
-                    className="px-3 py-1.5 rounded-lg bg-green-50 text-green-700 text-sm font-medium border border-green-100"
-                  >
-                    {provider.name}
-                    <span className="ml-1.5 text-green-600/70 text-xs">{provider.provider_type}</span>
-                  </span>
-                ))}
+              <div className="space-y-2">
+                {baseProviders.map((provider) => {
+                  const status: ProviderStatusInfo = provider.last_synced
+                    ? { status: 'connected', message: 'Available' }
+                    : { status: 'disconnected', message: 'Not synced' };
+
+                  return (
+                    <ProviderCard
+                      key={provider.id}
+                      provider={provider}
+                      status={status}
+                      showRefresh={false}
+                      variant="default"
+                    />
+                  );
+                })}
               </div>
             </div>
           )}
