@@ -30,6 +30,7 @@
 		"dotenv": "^17.2.3",
 		"highlight.js": "^11.11.1",
 		"js-tiktoken": "1.0.21",
+		"letta-teams-sdk": "^0.10.0",
 		"lucide-react": "1.11.0",
 		"os-utils": "^0.0.14",
 		"react": "^19.2.3",

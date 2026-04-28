@@ -67,11 +67,14 @@ import { getPreloadPath, getUIPath, getIconPath } from "./pathResolver.js";
 import { getStaticData, pollResources, stopPolling } from "./test.js";
 import { handleClientEvent, cleanupAllSessions } from "./ipc-handlers.js";
 import { LettaCodeManager, type LettaCodeStatusPayload } from "./letta-code-manager.js";
+import { getTeamsRuntimeManager } from "./teams-runtime.js";
+import { registerTeamsIpc } from "./teams-ipc.js";
 
 let cleanupComplete = false;
 let mainWindow: BrowserWindow | null = null;
 let appConfig: Config;
 const lettaCode = new LettaCodeManager();
+const teamsRuntime = getTeamsRuntimeManager();
 
 // IPC validation helper
 function validateClientEvent(data: unknown): data is ClientEvent {
@@ -121,6 +124,7 @@ function cleanup(): void {
     cleanupAllSessions();
     // Fire-and-forget; Electron is tearing down anyway
     lettaCode.stop().catch(() => {});
+    teamsRuntime.stop().catch(() => {});
     closeDatabase();
     killViteDevServer();
 }
@@ -208,6 +212,8 @@ app.on("ready", () => {
     ipcMainHandle("getStaticData", () => {
         return getStaticData();
     });
+
+    registerTeamsIpc(teamsRuntime);
 
     // Handle client events with validation
     ipcMain.on("client-event", (event: Electron.IpcMainEvent, data: unknown) => {
