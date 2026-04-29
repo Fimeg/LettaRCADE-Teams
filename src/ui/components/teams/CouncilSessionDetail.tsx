@@ -17,7 +17,7 @@ export function CouncilSessionDetail({ detail }: CouncilSessionDetailProps) {
   return (
     <div className="h-full overflow-y-auto px-6 py-6">
       <div className="mx-auto max-w-4xl space-y-6">
-        <section className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
+        <section className="rounded-2xl border border-ink-900/10 bg-surface p-5 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <div className="flex flex-wrap items-center gap-2">
@@ -103,7 +103,7 @@ export function CouncilSessionDetail({ detail }: CouncilSessionDetailProps) {
             const synthesis = synthesisByTurn[turnKey];
 
             return (
-              <div key={turnKey} className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
+              <div key={turnKey} className="rounded-2xl border border-ink-900/10 bg-surface p-5 shadow-sm">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                   <div>
                     <h4 className="text-base font-semibold text-ink-900">Turn {turn.turn}</h4>
@@ -193,7 +193,7 @@ export function CouncilSessionDetail({ detail }: CouncilSessionDetailProps) {
           })}
         </section>
 
-        <section className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
+        <section className="rounded-2xl border border-ink-900/10 bg-surface p-5 shadow-sm">
           <h4 className="text-base font-semibold text-ink-900">Final plan</h4>
           <pre className="mt-4 whitespace-pre-wrap break-words rounded-xl bg-surface px-4 py-4 text-sm text-ink-800">
             {finalPlan ?? 'No final plan has been written yet.'}

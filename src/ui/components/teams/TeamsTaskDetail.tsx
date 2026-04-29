@@ -52,7 +52,7 @@ export function TeamsTaskDetail({
   return (
     <div className="h-full overflow-y-auto px-6 py-6">
       <div className="mx-auto max-w-4xl space-y-6">
-        <section className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
+        <section className="rounded-2xl border border-ink-900/10 bg-surface p-5 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <div className="flex flex-wrap items-center gap-2">
@@ -120,7 +120,7 @@ export function TeamsTaskDetail({
 
         <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)]">
           <div className="space-y-6">
-            <div className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
+            <div className="rounded-2xl border border-ink-900/10 bg-surface p-5 shadow-sm">
               <div className="flex items-center gap-2">
                 <MessageSquareText className="h-4 w-4 text-accent" />
                 <h4 className="text-base font-semibold text-ink-900">Message</h4>
@@ -130,14 +130,14 @@ export function TeamsTaskDetail({
               </pre>
             </div>
 
-            <div className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
+            <div className="rounded-2xl border border-ink-900/10 bg-surface p-5 shadow-sm">
               <h4 className="text-base font-semibold text-ink-900">Outcome</h4>
               <pre className="mt-4 whitespace-pre-wrap break-words rounded-xl bg-surface px-4 py-4 text-sm text-ink-800">
                 {formatTaskPreview(task)}
               </pre>
             </div>
 
-            <div className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
+            <div className="rounded-2xl border border-ink-900/10 bg-surface p-5 shadow-sm">
               <h4 className="text-base font-semibold text-ink-900">Tool calls</h4>
 
               <div className="mt-4 space-y-3">
@@ -159,7 +159,7 @@ export function TeamsTaskDetail({
             </div>
 
             {task.initEvents?.length ? (
-              <div className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
+              <div className="rounded-2xl border border-ink-900/10 bg-surface p-5 shadow-sm">
                 <h4 className="text-base font-semibold text-ink-900">Init transcript</h4>
 
                 <div className="mt-4 space-y-3">
@@ -180,7 +180,7 @@ export function TeamsTaskDetail({
 
           <div className="space-y-6">
             {hasReviewWorkflow && (
-              <div className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
+              <div className="rounded-2xl border border-ink-900/10 bg-surface p-5 shadow-sm">
                 <h4 className="text-base font-semibold text-ink-900">Review workflow</h4>
 
                 <dl className="mt-4 space-y-4">
@@ -279,7 +279,7 @@ export function TeamsTaskDetail({
               </div>
             )}
 
-            <div className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
+            <div className="rounded-2xl border border-ink-900/10 bg-surface p-5 shadow-sm">
               <h4 className="text-base font-semibold text-ink-900">Timing</h4>
               <dl className="mt-4 space-y-4">
                 <div>
@@ -298,7 +298,7 @@ export function TeamsTaskDetail({
             </div>
 
             {!hasReviewWorkflow && (
-              <div className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
+              <div className="rounded-2xl border border-ink-900/10 bg-surface p-5 shadow-sm">
                 <h4 className="text-base font-semibold text-ink-900">Review metadata</h4>
                 <p className="mt-4 text-sm text-ink-600">This task is not part of a review workflow.</p>
               </div>

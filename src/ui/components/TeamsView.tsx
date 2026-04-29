@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import type { DispatchTaskInput, SpawnTeammateInput } from 'letta-teams/types';
 import { AlertCircle, FolderOpen, Play, RefreshCw, Send, Server, Users } from 'lucide-react';
 import { Button } from './ui/primitives/Button';
-import { Input } from './ui/primitives/Input';
+import { Input, inputVariants } from './ui/primitives/Input';
 import { FormField } from './ui/composites/FormField';
 import { Modal, ModalContent, ModalHeader, ModalTitle, ModalDescription, ModalFooter } from './ui/composites/Modal';
 import { SplitPaneDivider, SplitPaneGroup, SplitPanePanel } from './ui/layout/SplitPane';
@@ -255,7 +255,7 @@ export function TeamsView() {
   return (
     <div className="h-full overflow-y-auto bg-surface px-6 py-6">
       <div className="mx-auto flex max-w-7xl flex-col gap-6">
-        <section className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
+        <section className="rounded-2xl border border-ink-900/10 bg-surface p-5 shadow-sm">
           <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
             <div className="space-y-4">
               <div className="flex items-center gap-3">
@@ -356,7 +356,7 @@ export function TeamsView() {
 
           <TabsContent value="monitor" className="mt-6 space-y-6">
             <div className="grid gap-6 xl:grid-cols-2">
-              <section className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
+              <section className="rounded-2xl border border-ink-900/10 bg-surface p-5 shadow-sm">
                 <div className="mb-4 flex items-center gap-2">
                   <Users className="h-4 w-4 text-accent" />
                   <h3 className="text-base font-semibold text-ink-900">Spawn teammate</h3>
@@ -376,7 +376,8 @@ export function TeamsView() {
                       value={spawnForm.role}
                       onChange={(event) => { setSpawnForm((current) => ({ ...current, role: event.target.value })); setSpawnErrors((prev) => ({ ...prev, role: undefined })); }}
                       placeholder="Investigates implementation details and reports findings."
-                      className="min-h-24 w-full rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-sm text-ink-900 outline-none transition-colors placeholder:text-ink-400 focus:ring-2 focus:ring-accent/50"
+                      rows={4}
+                      className={inputVariants({ size: 'md' }) + ' min-h-24 resize-vertical'}
                     />
                   </FormField>
 
@@ -407,7 +408,7 @@ export function TeamsView() {
                 </form>
               </section>
 
-              <section className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
+              <section className="rounded-2xl border border-ink-900/10 bg-surface p-5 shadow-sm">
                 <div className="mb-4 flex items-center gap-2">
                   <Send className="h-4 w-4 text-accent" />
                   <h3 className="text-base font-semibold text-ink-900">Dispatch task</h3>
@@ -426,7 +427,8 @@ export function TeamsView() {
                       value={dispatchForm.message}
                       onChange={(event) => { setDispatchForm((current) => ({ ...current, message: event.target.value })); setDispatchErrors((prev) => ({ ...prev, message: undefined })); }}
                       placeholder="Investigate why the build is failing and report back with root cause."
-                      className="min-h-28 w-full rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-sm text-ink-900 outline-none transition-colors placeholder:text-ink-400 focus:ring-2 focus:ring-accent/50"
+                      rows={5}
+                      className={inputVariants({ size: 'md' }) + ' min-h-28 resize-vertical'}
                     />
                   </FormField>
 
@@ -451,7 +453,7 @@ export function TeamsView() {
                           <select
                             value={dispatchForm.reviewer}
                             onChange={(event) => { setDispatchForm((current) => ({ ...current, reviewer: event.target.value })); setDispatchErrors((prev) => ({ ...prev, reviewer: undefined })); }}
-                            className="w-full rounded-lg border border-ink-900/10 bg-white px-3 py-2 text-sm text-ink-900 outline-none focus:ring-2 focus:ring-accent/50"
+                            className={inputVariants({ size: 'md' })}
                           >
                             <option value="">Select reviewer</option>
                             {reviewTargetOptions.map((option) => (
@@ -469,7 +471,7 @@ export function TeamsView() {
                               ...current,
                               reviewGate: event.target.value as 'on_success' | 'always',
                             }))}
-                            className="w-full rounded-lg border border-ink-900/10 bg-white px-3 py-2 text-sm text-ink-900 outline-none focus:ring-2 focus:ring-accent/50"
+                            className={inputVariants({ size: 'md' })}
                           >
                             <option value="on_success">Review on success</option>
                             <option value="always">Always review</option>

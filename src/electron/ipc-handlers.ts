@@ -28,38 +28,42 @@ function broadcast(event: ServerEvent) {
   }
 }
 
-// ── Session Manager ─────────────────────────────────────────────────────────
-// Lazily initialized so canUseTool can reference it (avoid TDZ).
-let sessionManager: SessionManager;
+// ── IPC Handlers ───────────────────────────────────────────────────────────
+// Encapsulates session management in a class to avoid module-level mutable
+// state (ETHOS anti-pattern). Instance is created at app startup.
+export class IPCHandlers {
+  private sessionManager: SessionManager;
 
-const canUseTool: CanUseToolWithSession = async (conversationId, toolName, toolInput): Promise<CanUseToolResponse> => {
-  // AskUserQuestion always requires runtime user input we can't surface yet
-  if (toolName === "AskUserQuestion") {
-    return { behavior: "deny", message: "AskUserQuestion not yet supported in the UI" };
+  constructor() {
+    this.sessionManager = new SessionManager({
+      onEvent: broadcast,
+      canUseTool: this.canUseTool.bind(this),
+      // Don't use bypassPermissions — we want canUseTool to be called so the
+      // UI can show an approval dialog for each tool.
+      permissionMode: "default",
+    });
   }
 
-  const toolUseId = sessionManager.generateToolUseId();
-  const sessionId = conversationId;
+  private canUseTool: CanUseToolWithSession = async (conversationId, toolName, toolInput): Promise<CanUseToolResponse> => {
+    // AskUserQuestion always requires runtime user input we can't surface yet
+    if (toolName === "AskUserQuestion") {
+      return { behavior: "deny", message: "AskUserQuestion not yet supported in the UI" };
+    }
 
-  return new Promise<CanUseToolResponse>((resolve) => {
-    sessionManager.setPendingResolver(toolUseId, resolve);
+    const toolUseId = this.sessionManager.generateToolUseId();
+    const sessionId = conversationId;
 
-    broadcast({
-      type: "permission.request",
-      payload: { sessionId, toolUseId, toolName, input: toolInput },
+    return new Promise<CanUseToolResponse>((resolve) => {
+      this.sessionManager.setPendingResolver(toolUseId, resolve);
+
+      broadcast({
+        type: "permission.request",
+        payload: { sessionId, toolUseId, toolName, input: toolInput },
+      });
     });
-  });
-};
+  };
 
-sessionManager = new SessionManager({
-  onEvent: broadcast,
-  canUseTool,
-  // Don't use bypassPermissions — we want canUseTool to be called so the
-  // UI can show an approval dialog for each tool.
-  permissionMode: "default",
-});
-
-export async function handleClientEvent(event: ClientEvent) {
+  async handleClientEvent(event: ClientEvent) {
   debug(`handleClientEvent: ${event.type}`, { payload: "payload" in event ? event.payload : undefined });
 
   if (event.type === "session.list") {
@@ -84,10 +88,10 @@ export async function handleClientEvent(event: ClientEvent) {
     debug("session.start", { agentId, prompt: prompt?.slice(0, 50), cwd });
 
     try {
-      const { conversationId } = await sessionManager.create(agentId);
+      const { conversationId } = await this.sessionManager.create(agentId);
 
       if (prompt) {
-        await sessionManager.send(conversationId, prompt);
+        await this.sessionManager.send(conversationId, prompt);
       }
     } catch (error) {
       log("session.start: ERROR", { error: String(error) });
@@ -105,8 +109,8 @@ export async function handleClientEvent(event: ClientEvent) {
     debug("session.continue", { conversationId: sessionId, prompt: prompt?.slice(0, 50) });
 
     try {
-      await sessionManager.ensure(sessionId);
-      await sessionManager.send(sessionId, prompt);
+      await this.sessionManager.ensure(sessionId);
+      await this.sessionManager.send(sessionId, prompt);
     } catch (error) {
       log("session.continue: ERROR", { error: String(error) });
       broadcast({
@@ -121,7 +125,7 @@ export async function handleClientEvent(event: ClientEvent) {
   if (event.type === "session.stop") {
     const { sessionId } = event.payload;
     debug("session.stop", { sessionId });
-    await sessionManager.abort(sessionId);
+    await this.sessionManager.abort(sessionId);
     return;
   }
 
@@ -129,7 +133,7 @@ export async function handleClientEvent(event: ClientEvent) {
   if (event.type === "session.delete") {
     const { sessionId } = event.payload;
     debug("session.delete", { sessionId });
-    await sessionManager.close(sessionId);
+    await this.sessionManager.close(sessionId);
     return;
   }
 
@@ -138,14 +142,15 @@ export async function handleClientEvent(event: ClientEvent) {
     const { sessionId, toolUseId, result } = event.payload;
     debug("permission.response", { sessionId, toolUseId, behavior: result.behavior });
 
-    const resolved = sessionManager.resolvePendingTool(toolUseId, result);
+    const resolved = this.sessionManager.resolvePendingTool(toolUseId, result);
     if (!resolved) {
       log("permission.response: no pending resolver for", { toolUseId });
     }
     return;
   }
-}
+  }
 
-export function cleanupAllSessions(): void {
-  sessionManager.closeAll();
+  cleanupAllSessions(): void {
+    this.sessionManager.closeAll();
+  }
 }

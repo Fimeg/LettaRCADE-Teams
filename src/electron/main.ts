@@ -65,7 +65,9 @@ if (process.env.LETTA_CODE_CLI_PATH && !process.env.LETTA_CLI_PATH) {
 }
 import { getPreloadPath, getUIPath, getIconPath } from "./pathResolver.js";
 import { getStaticData, pollResources, stopPolling } from "./test.js";
-import { handleClientEvent, cleanupAllSessions } from "./ipc-handlers.js";
+import { IPCHandlers } from "./ipc-handlers.js";
+
+const ipcHandlers = new IPCHandlers();
 import { LettaCodeManager, type LettaCodeStatusPayload } from "./letta-code-manager.js";
 import { getTeamsRuntimeManager } from "./teams-runtime.js";
 import { registerTeamsIpc } from "./teams-ipc.js";
@@ -121,7 +123,7 @@ function cleanup(): void {
 
     globalShortcut.unregisterAll();
     stopPolling();
-    cleanupAllSessions();
+    ipcHandlers.cleanupAllSessions();
     // Fire-and-forget; Electron is tearing down anyway
     lettaCode.stop().catch(() => {});
     teamsRuntime.stop().catch(() => {});
@@ -225,7 +227,7 @@ app.on("ready", () => {
             }));
             return;
         }
-        handleClientEvent(data);
+        ipcHandlers.handleClientEvent(data);
     });
 
     // Handle recent cwds request

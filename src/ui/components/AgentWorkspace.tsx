@@ -1457,7 +1457,7 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
                 <div className="flex w-full items-end gap-3 rounded-2xl border border-ink-900/10 bg-surface px-4 py-3 shadow-card">
                   <textarea
                     rows={1}
-                    className="flex-1 resize-none bg-transparent py-1.5 text-sm text-ink-800 placeholder:text-muted focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                    className={inputVariants({ size: 'md' }) + ' min-h-[24px] max-h-[200px] flex-1 resize-none bg-transparent py-1.5'}
                     placeholder={!activeConversationId ? "Select a conversation..." : "Type a message... (try /doctor, /clear)"}
                     value={inputValue}
                     onChange={(e) => {
@@ -1475,7 +1475,6 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
                       }
                     }}
                     disabled={!activeConversationId || isStreaming}
-                    style={{ minHeight: '24px', maxHeight: '200px' }}
                   />
                   <button
                     className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-white hover:bg-accent-hover transition-colors disabled:cursor-not-allowed disabled:opacity-60"

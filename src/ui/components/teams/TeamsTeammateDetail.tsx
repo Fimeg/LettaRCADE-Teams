@@ -26,7 +26,7 @@ export function TeamsTeammateDetail({
   return (
     <div className="h-full overflow-y-auto px-6 py-6">
       <div className="mx-auto max-w-4xl space-y-6">
-        <section className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
+        <section className="rounded-2xl border border-ink-900/10 bg-surface p-5 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <div className="flex flex-wrap items-center gap-2">
@@ -88,7 +88,7 @@ export function TeamsTeammateDetail({
 
         <section className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
           <div className="space-y-6">
-            <div className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
+            <div className="rounded-2xl border border-ink-900/10 bg-surface p-5 shadow-sm">
               <div className="flex items-center justify-between gap-3">
                 <h4 className="text-base font-semibold text-ink-900">Execution summary</h4>
                 <span className="text-xs text-ink-500">
@@ -129,7 +129,7 @@ export function TeamsTeammateDetail({
               )}
             </div>
 
-            <div className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
+            <div className="rounded-2xl border border-ink-900/10 bg-surface p-5 shadow-sm">
               <h4 className="text-base font-semibold text-ink-900">TODO items</h4>
 
               <div className="mt-4 space-y-3">
@@ -155,7 +155,7 @@ export function TeamsTeammateDetail({
               </div>
             </div>
 
-            <div className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
+            <div className="rounded-2xl border border-ink-900/10 bg-surface p-5 shadow-sm">
               <h4 className="text-base font-semibold text-ink-900">Recent status events</h4>
 
               <div className="mt-4 space-y-3">
@@ -181,7 +181,7 @@ export function TeamsTeammateDetail({
           </div>
 
           <div className="space-y-6">
-            <div className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
+            <div className="rounded-2xl border border-ink-900/10 bg-surface p-5 shadow-sm">
               <h4 className="text-base font-semibold text-ink-900">Targets</h4>
 
               <div className="mt-4 space-y-3">
@@ -214,7 +214,7 @@ export function TeamsTeammateDetail({
               </div>
             </div>
 
-            <div className="rounded-2xl border border-ink-900/10 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
+            <div className="rounded-2xl border border-ink-900/10 bg-surface p-5 shadow-sm">
               <h4 className="text-base font-semibold text-ink-900">Initialization</h4>
 
               <dl className="mt-4 space-y-4">
