@@ -24,6 +24,8 @@ export interface AgentSummary {
    *  Populated lazily when an agent is opened (loadAgent), so unopened
    *  agents show no badge until first inspection. */
   staleConversationCount?: number;
+  /** If this agent is also a Teams teammate, the teammate name. */
+  teammateName?: string;
 }
 
 export const MEMFS_AGENT_TAG = 'git-memory-enabled';
@@ -397,6 +399,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       for await (const agent of client.agents.list()) {
         list.push(agent);
       }
+
+      // Cross-reference with Teams teammates, if available.
+      let agentTeammateMap: Record<string, string> = {};
+      try {
+        if (typeof window !== 'undefined' && window.electron?.teams?.getAgentTeammateMap) {
+          agentTeammateMap = await window.electron.teams.getAgentTeammateMap();
+        }
+      } catch {
+        // Teams runtime not available — skip cross-reference.
+      }
+
       const summaries: AgentSummary[] = list.map((a) => {
         const anyA = a as unknown as Record<string, unknown>;
         const tools = anyA.tools as unknown[] | undefined;
@@ -419,6 +432,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           lastRun: (anyA.last_run_completion as string | null | undefined) ?? null,
           tags,
           memfsEnabled,
+          teammateName: agentTeammateMap[a.id],
         };
       });
       set({ agentList: summaries, agentsLoading: false });

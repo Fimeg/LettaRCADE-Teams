@@ -1,4 +1,4 @@
-import type { TeammateState } from 'letta-teams-sdk';
+import type { TeammateState } from 'letta-teams/types';
 import { Bot, GitFork, RotateCcw, Send, Target } from 'lucide-react';
 import { Button } from '../ui/primitives/Button';
 import { formatProgress, formatTimestamp, initStatusClasses, teammateStatusClasses } from './utils';

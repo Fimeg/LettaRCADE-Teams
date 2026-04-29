@@ -1,4 +1,4 @@
-import type { TaskState, TeammateState } from 'letta-teams-sdk';
+import type { TaskState, TeammateState } from 'letta-teams/types';
 import { Bot, Radio, Send, Users } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import type { TeamsSelectionType, TeamsTaskFilter } from '../../store/useTeamsStore';
@@ -70,7 +70,7 @@ export function TeamsSidebar({
   const visibleTasks = tasks.filter((task) => matchesTaskFilter(task, taskFilter));
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-white/60">
+    <div className="flex h-full min-h-0 flex-col bg-surface">
       <div className="border-b border-ink-900/10 px-4 py-4">
         <div className="flex items-center gap-2">
           <Radio className="h-4 w-4 text-accent" />

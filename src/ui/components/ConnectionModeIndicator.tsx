@@ -11,6 +11,7 @@ import { useState, useEffect } from "react";
 import { useLettaCodeSpawn } from "../hooks/useLettaCodeSpawn";
 import { useAppStore } from "../store/useAppStore";
 import { getApiKeyAsync } from "../services/api";
+import { Input } from "./ui/primitives/Input";
 
 export type ConnectionMode = "server" | "local" | "remote" | "teleport";
 
@@ -289,12 +290,13 @@ export default function ConnectionModeIndicator({
       {mode === "remote" && (
         <div className="flex items-center gap-2 pl-1">
           <span className="text-xs text-ink-500">Remote URL:</span>
-          <input
+          <Input
             type="text"
             value={remoteUrl || ""}
             onChange={(e) => onRemoteUrlChange?.(e.target.value)}
             placeholder="http://remote-server:8283"
-            className="text-xs px-2 py-1 rounded border border-ink-900/10 bg-white flex-1 min-w-[200px]"
+            size="sm"
+            className="flex-1 min-w-[200px]"
           />
           {!remoteUrl && (
             <span className="text-xs text-amber-600">Enter a remote server URL</span>

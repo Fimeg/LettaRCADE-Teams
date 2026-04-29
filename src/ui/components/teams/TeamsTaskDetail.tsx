@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { TaskState } from 'letta-teams-sdk';
+import type { TaskState } from 'letta-teams/types';
 import { Bot, MessageSquareText, Square, Workflow } from 'lucide-react';
 import { Button } from '../ui/primitives/Button';
 import { isTaskActive } from '../../store/useTeamsStore';

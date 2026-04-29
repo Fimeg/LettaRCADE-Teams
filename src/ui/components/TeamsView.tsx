@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import type { DispatchTaskInput, SpawnTeammateInput } from 'letta-teams-sdk';
+import type { DispatchTaskInput, SpawnTeammateInput } from 'letta-teams/types';
 import { AlertCircle, FolderOpen, Play, RefreshCw, Send, Server, Users } from 'lucide-react';
 import { Button } from './ui/primitives/Button';
 import { Input } from './ui/primitives/Input';
+import { FormField } from './ui/composites/FormField';
+import { Modal, ModalContent, ModalHeader, ModalTitle, ModalDescription, ModalFooter } from './ui/composites/Modal';
 import { SplitPaneDivider, SplitPaneGroup, SplitPanePanel } from './ui/layout/SplitPane';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/layout/Tabs';
 import { isTaskActive, useTeamsStore } from '../store/useTeamsStore';
@@ -68,6 +70,7 @@ export function TeamsView() {
     model: '',
     memfsEnabled: false,
   });
+  const [spawnErrors, setSpawnErrors] = useState<{ name?: string; role?: string }>({});
   const [dispatchForm, setDispatchForm] = useState({
     target: '',
     message: '',
@@ -75,6 +78,9 @@ export function TeamsView() {
     reviewer: '',
     reviewGate: 'on_success' as 'on_success' | 'always',
   });
+  const [dispatchErrors, setDispatchErrors] = useState<{ target?: string; message?: string; reviewer?: string }>({});
+  const [forkModal, setForkModal] = useState<{ name: string; forkName: string } | null>(null);
+  const [reinitModal, setReinitModal] = useState<{ name: string; prompt: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -132,41 +138,49 @@ export function TeamsView() {
 
   const handleSpawn = async (event: FormEvent) => {
     event.preventDefault();
+    setSpawnErrors({});
 
-    const input: SpawnTeammateInput = {
-      name: spawnForm.name.trim(),
-      role: spawnForm.role.trim(),
-      model: spawnForm.model.trim() || undefined,
-      memfsEnabled: spawnForm.memfsEnabled,
-    };
+    const name = spawnForm.name.trim();
+    const role = spawnForm.role.trim();
 
-    if (!input.name || !input.role) {
+    const errors: { name?: string; role?: string } = {};
+    if (!name) errors.name = 'Teammate name is required';
+    if (!role) errors.role = 'Teammate role is required';
+
+    if (Object.keys(errors).length > 0) {
+      setSpawnErrors(errors);
       return;
     }
 
+    const input: SpawnTeammateInput = { name, role, model: spawnForm.model.trim() || undefined, memfsEnabled: spawnForm.memfsEnabled };
     const teammate = await spawnTeammate(input);
     setSpawnForm((current) => ({ ...current, name: '', role: '', model: '' }));
+    setSpawnErrors({});
     setDispatchForm((current) => ({ ...current, target: current.target || teammate.name }));
   };
 
   const handleDispatch = async (event: FormEvent) => {
     event.preventDefault();
+    setDispatchErrors({});
 
     const target = dispatchForm.target.trim();
     const message = dispatchForm.message.trim();
     const reviewer = dispatchForm.reviewer.trim();
 
-    const input: DispatchTaskInput = {
-      target,
-      message,
-    };
+    const errors: { target?: string; message?: string; reviewer?: string } = {};
+    if (!target) errors.target = 'Target teammate is required';
+    if (!message) errors.message = 'Task message is required';
 
-    if (!input.target || !input.message) {
+    if (Object.keys(errors).length > 0) {
+      setDispatchErrors(errors);
       return;
     }
 
+    const input: DispatchTaskInput = { target, message };
+
     if (dispatchForm.reviewEnabled) {
       if (!reviewer) {
+        setDispatchErrors((prev) => ({ ...prev, reviewer: 'Reviewer is required when review is enabled' }));
         return;
       }
 
@@ -196,14 +210,28 @@ export function TeamsView() {
   };
 
   const handleFork = async (name: string) => {
-    const forkName = window.prompt(`Fork ${name} as:`, `${name}-memory`)?.trim();
-    if (!forkName) return;
-    await forkTeammate(name, forkName);
+    setForkModal({ name, forkName: `${name}-memory` });
   };
 
   const handleReinit = async (name: string) => {
-    const prompt = window.prompt(`Optional reinit prompt for ${name}:`, '')?.trim();
-    await reinitTeammate(name, prompt || undefined);
+    setReinitModal({ name, prompt: '' });
+  };
+
+  const doFork = async () => {
+    if (!forkModal) return;
+    const name = forkModal.name;
+    const forkName = forkModal.forkName.trim();
+    if (!forkName) return;
+    setForkModal(null);
+    await forkTeammate(name, forkName);
+  };
+
+  const doReinit = async () => {
+    if (!reinitModal) return;
+    const name = reinitModal.name;
+    const prompt = reinitModal.prompt.trim() || undefined;
+    setReinitModal(null);
+    await reinitTeammate(name, prompt);
   };
 
   if (bootstrapped && !supported) {
@@ -335,24 +363,22 @@ export function TeamsView() {
                 </div>
 
                 <form className="space-y-3" onSubmit={handleSpawn}>
-                  <div>
-                    <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Name</label>
+                  <FormField label="Name" error={spawnErrors.name}>
                     <Input
                       value={spawnForm.name}
-                      onChange={(event) => setSpawnForm((current) => ({ ...current, name: event.target.value }))}
+                      onChange={(event) => { setSpawnForm((current) => ({ ...current, name: event.target.value })); setSpawnErrors((prev) => ({ ...prev, name: undefined })); }}
                       placeholder="researcher"
                     />
-                  </div>
+                  </FormField>
 
-                  <div>
-                    <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Role</label>
+                  <FormField label="Role" error={spawnErrors.role}>
                     <textarea
                       value={spawnForm.role}
-                      onChange={(event) => setSpawnForm((current) => ({ ...current, role: event.target.value }))}
+                      onChange={(event) => { setSpawnForm((current) => ({ ...current, role: event.target.value })); setSpawnErrors((prev) => ({ ...prev, role: undefined })); }}
                       placeholder="Investigates implementation details and reports findings."
                       className="min-h-24 w-full rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-sm text-ink-900 outline-none transition-colors placeholder:text-ink-400 focus:ring-2 focus:ring-accent/50"
                     />
-                  </div>
+                  </FormField>
 
                   <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
                     <div>
@@ -388,23 +414,21 @@ export function TeamsView() {
                 </div>
 
                 <form className="space-y-3" onSubmit={handleDispatch}>
-                  <div>
-                    <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Target</label>
+                  <FormField label="Target" error={dispatchErrors.target}>
                     <Input
                       value={dispatchForm.target}
-                      onChange={(event) => setDispatchForm((current) => ({ ...current, target: event.target.value }))}
+                      onChange={(event) => { setDispatchForm((current) => ({ ...current, target: event.target.value })); setDispatchErrors((prev) => ({ ...prev, target: undefined })); }}
                       placeholder="researcher or researcher/memory"
                     />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Message</label>
+                  </FormField>
+                  <FormField label="Message" error={dispatchErrors.message}>
                     <textarea
                       value={dispatchForm.message}
-                      onChange={(event) => setDispatchForm((current) => ({ ...current, message: event.target.value }))}
+                      onChange={(event) => { setDispatchForm((current) => ({ ...current, message: event.target.value })); setDispatchErrors((prev) => ({ ...prev, message: undefined })); }}
                       placeholder="Investigate why the build is failing and report back with root cause."
                       className="min-h-28 w-full rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-sm text-ink-900 outline-none transition-colors placeholder:text-ink-400 focus:ring-2 focus:ring-accent/50"
                     />
-                  </div>
+                  </FormField>
 
                   <div className="rounded-xl border border-ink-900/10 bg-surface-cream/70 p-4">
                     <label className="flex items-center gap-2 text-sm font-medium text-ink-800">
@@ -423,11 +447,10 @@ export function TeamsView() {
 
                     {dispatchForm.reviewEnabled && (
                       <div className="mt-4 space-y-3">
-                        <div>
-                          <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Reviewer</label>
+                        <FormField label="Reviewer" error={dispatchErrors.reviewer}>
                           <select
                             value={dispatchForm.reviewer}
-                            onChange={(event) => setDispatchForm((current) => ({ ...current, reviewer: event.target.value }))}
+                            onChange={(event) => { setDispatchForm((current) => ({ ...current, reviewer: event.target.value })); setDispatchErrors((prev) => ({ ...prev, reviewer: undefined })); }}
                             className="w-full rounded-lg border border-ink-900/10 bg-white px-3 py-2 text-sm text-ink-900 outline-none focus:ring-2 focus:ring-accent/50"
                           >
                             <option value="">Select reviewer</option>
@@ -437,10 +460,9 @@ export function TeamsView() {
                               </option>
                             ))}
                           </select>
-                        </div>
+                        </FormField>
 
-                        <div>
-                          <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Review gate</label>
+                        <FormField label="Review gate">
                           <select
                             value={dispatchForm.reviewGate}
                             onChange={(event) => setDispatchForm((current) => ({
@@ -452,7 +474,7 @@ export function TeamsView() {
                             <option value="on_success">Review on success</option>
                             <option value="always">Always review</option>
                           </select>
-                        </div>
+                        </FormField>
 
                         <p className="text-xs text-ink-600">
                           {getReviewGateHelpText(dispatchForm.reviewGate)}
@@ -557,6 +579,57 @@ export function TeamsView() {
           </TabsContent>
         </Tabs>
       </div>
+
+      <Modal open={forkModal !== null} onOpenChange={() => setForkModal(null)}>
+        <ModalContent size="sm">
+          <ModalHeader>
+            <ModalTitle>Fork teammate</ModalTitle>
+            <ModalDescription>
+              Create a named fork of <strong>{forkModal?.name}</strong>. This creates a separate conversation target branching from the teammate's root memory.
+            </ModalDescription>
+          </ModalHeader>
+          <div className="mt-4">
+            <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Fork name</label>
+            <Input
+              value={forkModal?.forkName ?? ''}
+              onChange={(event) => setForkModal((prev) => prev ? { ...prev, forkName: event.target.value } : null)}
+              placeholder="memory-review"
+            />
+          </div>
+          <ModalFooter>
+            <Button variant="secondary" onClick={() => setForkModal(null)}>Cancel</Button>
+            <Button variant="primary" onClick={() => void doFork()} disabled={!forkModal?.forkName.trim()}>
+              Fork
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      <Modal open={reinitModal !== null} onOpenChange={() => setReinitModal(null)}>
+        <ModalContent size="sm">
+          <ModalHeader>
+            <ModalTitle>Reinitialize teammate</ModalTitle>
+            <ModalDescription>
+              Reinitialize <strong>{reinitModal?.name}</strong>. This will refresh the teammate's memory and system prompts.
+            </ModalDescription>
+          </ModalHeader>
+          <div className="mt-4">
+            <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Reinit prompt (optional)</label>
+            <textarea
+              value={reinitModal?.prompt ?? ''}
+              onChange={(event) => setReinitModal((prev) => prev ? { ...prev, prompt: event.target.value } : null)}
+              placeholder="Focus on improving code quality workflows."
+              className="min-h-24 w-full rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-sm text-ink-900 outline-none transition-colors placeholder:text-ink-400 focus:ring-2 focus:ring-accent/50"
+            />
+          </div>
+          <ModalFooter>
+            <Button variant="secondary" onClick={() => setReinitModal(null)}>Cancel</Button>
+            <Button variant="primary" onClick={() => void doReinit()}>
+              Reinitialize
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
     </div>
   );
 }

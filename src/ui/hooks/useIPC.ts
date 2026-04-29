@@ -4,27 +4,26 @@ import { getLettaClient } from "../services/api";
 
 export function useIPC(onEvent: (event: ServerEvent) => void) {
   const [connected, setConnected] = useState(false);
-  const unsubscribeRef = useRef<(() => void) | null>(null);
+  const onEventRef = useRef(onEvent);
+  onEventRef.current = onEvent; // always up-to-date, no re-subscribe needed
 
   useEffect(() => {
     // Check if running in Electron
     const isElectron = typeof window !== 'undefined' && window.electron !== undefined;
 
     if (isElectron) {
-      // Use Electron IPC
+      // Use Electron IPC — read onEvent from ref to avoid re-subscribing when
+      // the callback identity changes (e.g. activeConversationId flips).
+      // Without this, a permission.request broadcast during the tear-down /
+      // re-setup gap is silently lost, stalling the canUseTool Promise.
       const unsubscribe = window.electron.onServerEvent((event: ServerEvent) => {
-        onEvent(event);
+        onEventRef.current(event);
       });
 
-      unsubscribeRef.current = unsubscribe;
       setConnected(true);
 
       return () => {
-        if (unsubscribeRef.current) {
-          unsubscribeRef.current();
-          unsubscribeRef.current = null;
-        }
-        setConnected(false);
+        unsubscribe();
       };
     } else {
       // Browser mode: Use HTTP API instead of WebSocket (since Redis is down)
@@ -47,7 +46,7 @@ export function useIPC(onEvent: (event: ServerEvent) => void) {
         setConnected(false);
       };
     }
-  }, [onEvent]);
+  }, []); // stable — reads ref instead of onEvent directly
 
   const sendEvent = useCallback(async (event: ClientEvent) => {
     const isElectron = typeof window !== 'undefined' && window.electron !== undefined;
@@ -57,7 +56,7 @@ export function useIPC(onEvent: (event: ServerEvent) => void) {
       return;
     }
 
-    // Browser mode: Handle client events via HTTP API
+    // Browser mode: Handle client events via HTTP API — read onEvent from ref
     console.log('[useIPC] Browser mode sendEvent:', event.type);
 
     try {
@@ -65,7 +64,7 @@ export function useIPC(onEvent: (event: ServerEvent) => void) {
       switch (event.type) {
         case "session.list": {
           const conversations = await client.conversations.list({ agent_id: 'default-agent' });
-          onEvent({
+          onEventRef.current({
             type: "session.list",
             payload: {
               sessions: conversations.map((c) => ({
@@ -81,7 +80,7 @@ export function useIPC(onEvent: (event: ServerEvent) => void) {
         }
         case "session.start": {
           const conv = await client.conversations.create({ agent_id: 'default-agent' });
-          onEvent({
+          onEventRef.current({
             type: "session.status",
             payload: {
               sessionId: conv.id,
@@ -96,12 +95,12 @@ export function useIPC(onEvent: (event: ServerEvent) => void) {
       }
     } catch (err) {
       console.error('[useIPC] Failed to send event:', err);
-      onEvent({
+      onEventRef.current({
         type: "runner.error",
         payload: { message: err instanceof Error ? err.message : 'Unknown error' }
       });
     }
-  }, [onEvent]);
+  }, []); // stable — reads onEvent from ref
 
   return { connected, sendEvent };
 }

@@ -5,7 +5,7 @@ import type {
   TaskState,
   TaskStatus,
   TeammateState,
-} from 'letta-teams-sdk';
+} from 'letta-teams/types';
 import { getApiBase, getApiKey } from '../services/api';
 import { useAppStore } from './useAppStore';
 
@@ -285,7 +285,8 @@ async function resolveDefaultProjectDir(): Promise<string | undefined> {
     try {
       const env = await window.electron.getRuntimeEnv();
       return normalizeProjectDir(env.cwd);
-    } catch {
+    } catch (err) {
+      console.warn('[useTeamsStore] Failed to resolve project dir from runtime env:', err);
       return undefined;
     }
   }
@@ -301,7 +302,8 @@ async function resolvePollInterval(): Promise<number> {
   try {
     const config = await window.electron.getConfig();
     return Math.max(MIN_POLL_INTERVAL_MS, config.pollingInterval || DEFAULT_POLL_INTERVAL_MS);
-  } catch {
+  } catch (err) {
+    console.warn('[useTeamsStore] Failed to resolve poll interval from config:', err);
     return DEFAULT_POLL_INTERVAL_MS;
   }
 }

@@ -1,5 +1,5 @@
 import { ipcMainHandle } from "./util.js";
-import type { DispatchTaskInput, SpawnTeammateInput, TaskStatus } from "letta-teams-sdk";
+import type { DispatchTaskInput, SpawnTeammateInput, TaskStatus } from "letta-teams/types";
 import type { TeamsConfigureInput, TeamsCouncilStartInput, TeamsRuntimeManager } from "./teams-runtime.js";
 
 export function registerTeamsIpc(teamsRuntime: TeamsRuntimeManager): void {
@@ -8,6 +8,7 @@ export function registerTeamsIpc(teamsRuntime: TeamsRuntimeManager): void {
   ipcMainHandle("teams:daemon:get-status", () => teamsRuntime.getDaemonStatus());
   ipcMainHandle("teams:daemon:ensure-running", () => teamsRuntime.ensureDaemonRunning());
 
+  ipcMainHandle("teams:agent-teammate-map", () => teamsRuntime.getAgentTeammateMap());
   ipcMainHandle("teams:teammates:list", () => teamsRuntime.listTeammates());
   ipcMainHandle("teams:teammates:get", (_event, name: string) => teamsRuntime.getTeammate(name));
   ipcMainHandle("teams:teammates:spawn", (_event, input: SpawnTeammateInput) => teamsRuntime.spawnTeammate(input));

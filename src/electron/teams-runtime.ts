@@ -1,45 +1,32 @@
-import { spawn, type ChildProcess } from "child_process";
 import { existsSync, mkdirSync, openSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import type {
-  DispatchTaskInput,
-  SpawnTeammateInput,
-  TaskState,
-  TaskStatus,
-  TeammateState,
-} from "letta-teams-sdk";
-import { getDaemonPort, stopDaemon as stopSdkDaemon } from "letta-teams-sdk/daemon";
-import {
-  dispatchTask,
-  forkTeammateViaDaemon,
-  getDaemonLogPath,
-  isDaemonRunning,
-  reinitTeammateViaDaemon,
-  spawnTeammateViaDaemon,
-  startCouncilViaDaemon,
-  waitForDaemon,
-  waitForTask,
-} from "letta-teams-sdk/ipc";
+import type { DispatchTaskInput, SpawnTeammateInput, TaskState, TaskStatus, TeammateState } from "letta-teams/types";
+import { spawnTeammate, checkApiKey, forkTeammate, messageTeammate } from "letta-teams/agent";
+import { processTask, recoverStaleInitTasks, startBackgroundInit } from "letta-teams/daemon";
+import { runCouncilSession } from "letta-teams/council/orchestrator";
 import {
   listCouncilOpinions,
   listCouncilSessions as listStoredCouncilSessions,
   loadCouncilSession,
   readCouncilFinalPlan,
   readCouncilSynthesis,
-} from "letta-teams-sdk/council/store";
+} from "letta-teams/council/store";
 import {
   getTask,
   listTasks,
-  listTeammates,
-  loadTeammate,
+  createTask,
   setProjectDir,
   targetExists,
   teammateExists,
   updateTask,
-} from "letta-teams-sdk/store";
+  listTeammates,
+  loadTeammate,
+} from "letta-teams/store";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 export type TeamsDaemonStatus = "stopped" | "starting" | "running" | "stopping" | "crashed";
 
@@ -129,6 +116,10 @@ export interface TeamsCouncilSessionDetail {
   finalPlan: string | null;
 }
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 function getDefaultBaseUrl(): string {
   return process.env.LETTA_BASE_URL?.trim() || "https://api.letta.com";
 }
@@ -138,8 +129,11 @@ function normalizeApiKey(apiKey: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+// ---------------------------------------------------------------------------
+// Runtime Manager
+// ---------------------------------------------------------------------------
+
 export class TeamsRuntimeManager {
-  private child: ChildProcess | null = null;
   private state: TeamsDaemonStatus = "stopped";
   private lastError?: string;
   private configured = false;
@@ -148,25 +142,27 @@ export class TeamsRuntimeManager {
     apiKey: normalizeApiKey(process.env.LETTA_API_KEY),
     projectDir: process.cwd(),
   };
-  private ensurePromise: Promise<TeamsDaemonStatusPayload> | null = null;
 
-  configure(input: TeamsConfigureInput = {}): TeamsRuntimeSnapshot | Promise<TeamsRuntimeSnapshot> {
+  /** Map of Letta agent ID → teammate name, for cross-referencing agent lists. */
+  getAgentTeammateMap(): Record<string, string> {
+    const map: Record<string, string> = {};
+    const teammates = listTeammates();
+    for (const t of teammates) {
+      if (t.agentId) map[t.agentId] = t.name;
+    }
+    return map;
+  }
+
+  configure(input: TeamsConfigureInput = {}): TeamsRuntimeSnapshot {
     const nextConfig: TeamsRuntimeConfig = {
       baseUrl: input.baseUrl?.trim() || this.config.baseUrl || getDefaultBaseUrl(),
       apiKey: input.apiKey === undefined ? this.config.apiKey : normalizeApiKey(input.apiKey),
       projectDir: input.projectDir?.trim() || this.config.projectDir || process.cwd(),
     };
 
-    const connectionChanged =
-      nextConfig.baseUrl !== this.config.baseUrl || nextConfig.apiKey !== this.config.apiKey;
-
     this.config = nextConfig;
     this.configured = true;
     this.applyRuntimeContext();
-
-    if (connectionChanged && isDaemonRunning()) {
-      return this.stop({ stopExternal: true }).then(() => this.getSnapshot());
-    }
 
     return this.getSnapshot();
   }
@@ -180,85 +176,32 @@ export class TeamsRuntimeManager {
   }
 
   getDaemonStatus(): TeamsDaemonStatusPayload {
-    const running = isDaemonRunning();
-    if (!running && this.state === "running" && !this.child) {
-      this.state = "stopped";
-    }
-
     return {
-      status:
-        running && (this.state === "starting" || this.state === "stopping")
-          ? this.state
-          : running
-            ? "running"
-            : this.state,
-      pid: this.child?.pid,
-      port: getDaemonPort(),
+      status: this.state,
+      port: 0,
       baseUrl: this.config.baseUrl,
       projectDir: this.config.projectDir,
-      logPath: getDaemonLogPath(),
+      logPath: "",
       error: this.lastError,
     };
   }
 
+  /** Ensure the runtime is ready to process operations.
+   *  Replaces daemon-start with a lightweight init check. */
   async ensureDaemonRunning(): Promise<TeamsDaemonStatusPayload> {
     this.applyRuntimeContext();
-
-    if (isDaemonRunning()) {
-      this.state = "running";
-      this.lastError = undefined;
-      return this.getDaemonStatus();
-    }
-
-    if (this.ensurePromise) {
-      return this.ensurePromise;
-    }
-
-    this.ensurePromise = this.startManagedDaemon();
-    try {
-      return await this.ensurePromise;
-    } finally {
-      this.ensurePromise = null;
-    }
-  }
-
-  async stop(options: { stopExternal?: boolean } = {}): Promise<TeamsDaemonStatusPayload> {
-    const { stopExternal = false } = options;
-    this.state = "stopping";
-
-    if (this.child) {
-      const child = this.child;
-      await new Promise<void>((resolve) => {
-        let settled = false;
-        const finish = () => {
-          if (settled) return;
-          settled = true;
-          resolve();
-        };
-
-        child.once("exit", finish);
-        child.kill("SIGTERM");
-
-        setTimeout(() => {
-          if (!settled) {
-            child.kill("SIGKILL");
-          }
-        }, 3000);
-
-        setTimeout(finish, 5000);
-      });
-    } else if (stopExternal && isDaemonRunning()) {
-      try {
-        await stopSdkDaemon();
-      } catch {
-        // Leave cleanup to the next startup attempt.
-      }
-    }
-
-    this.child = null;
-    this.state = isDaemonRunning() ? "crashed" : "stopped";
+    await recoverStaleInitTasks();
+    this.state = "running";
+    this.lastError = undefined;
     return this.getDaemonStatus();
   }
+
+  async stop(): Promise<TeamsDaemonStatusPayload> {
+    this.state = "stopped";
+    return this.getDaemonStatus();
+  }
+
+  // ─── Teammate operations ────────────────────────────────────────────────
 
   async listTeammates(): Promise<TeammateState[]> {
     return this.withProjectContext(() => listTeammates());
@@ -277,27 +220,42 @@ export class TeamsRuntimeManager {
   }
 
   async spawnTeammate(input: SpawnTeammateInput): Promise<TeammateState> {
-    await this.ensureDaemonRunning();
-    return spawnTeammateViaDaemon(input.name, input.role, {
+    const teammate = await spawnTeammate(input.name, input.role, {
       model: input.model,
       contextWindowLimit: input.contextWindowLimit,
       spawnPrompt: input.spawnPrompt,
       skipInit: input.skipInit,
       memfsEnabled: input.memfsEnabled,
       memfsStartup: input.memfsStartup,
-      projectDir: this.config.projectDir,
     });
+
+    // Kick off background init if not skipped
+    if (!input.skipInit && teammate.initTaskId) {
+      const startedAt = new Date().toISOString();
+      updateTask(teammate.initTaskId, { status: "running", startedAt });
+    }
+
+    return teammate;
   }
 
   async forkTeammate(name: string, forkName: string): Promise<TeammateState> {
-    await this.ensureDaemonRunning();
-    return forkTeammateViaDaemon(name, forkName, { projectDir: this.config.projectDir });
+    return forkTeammate(name, forkName);
   }
 
   async reinitTeammate(name: string, prompt?: string): Promise<string> {
-    await this.ensureDaemonRunning();
-    return reinitTeammateViaDaemon(name, { prompt, projectDir: this.config.projectDir });
+    const teammate = loadTeammate(name);
+    if (!teammate) throw new Error(`Teammate '${name}' not found`);
+
+    const taskId = await startBackgroundInit(teammate, {
+      message: "[internal reinit]",
+      prompt: prompt || `Reinitialize ${name} with current context.`,
+      syncReason: "reinitialize teammate",
+    });
+
+    return taskId;
   }
+
+  // ─── Task operations ────────────────────────────────────────────────────
 
   async getTask(id: string): Promise<TaskState | null> {
     return this.withProjectContext(() => getTask(id));
@@ -309,49 +267,66 @@ export class TeamsRuntimeManager {
 
   async dispatchTask(input: DispatchTaskInput): Promise<{ taskId: string }> {
     await this.ensureDaemonRunning();
-    return dispatchTask(input.target, input.message, {
-      projectDir: this.config.projectDir,
+
+    const task = createTask(input.target, input.message, {
+      pipelineId: input.options?.pipelineId,
+      requiresReview: !!input.options?.review,
+      reviewTarget: input.options?.review?.reviewer,
+      reviewGatePolicy: input.options?.review?.gate,
+    });
+
+    processTask(task.id, input.target, input.message, {
       pipelineId: input.options?.pipelineId,
       review: input.options?.review,
+    }).catch((err: Error) => {
+      console.error(`[teams-runtime] Task ${task.id} failed:`, err);
     });
+
+    return { taskId: task.id };
   }
 
   async waitForTask(id: string): Promise<TaskState> {
-    return waitForTask(id, { projectDir: this.config.projectDir });
+    return new Promise((resolve, reject) => {
+      const poll = () => {
+        const task = getTask(id);
+        if (!task) {
+          reject(new Error(`Task '${id}' not found`));
+          return;
+        }
+        if (task.status === "done" || task.status === "error" || task.status === "approved" || task.status === "rejected") {
+          resolve(task);
+          return;
+        }
+        setTimeout(poll, 1000);
+      };
+      poll();
+    });
   }
 
   async cancelTask(id: string): Promise<TaskState> {
     return this.withProjectContext(() => {
       const task = getTask(id);
-      if (!task) {
-        throw new Error(`Task '${id}' not found`);
-      }
-
-      if (task.status !== "pending" && task.status !== "running") {
-        return task;
-      }
+      if (!task) throw new Error(`Task '${id}' not found`);
+      if (task.status !== "pending" && task.status !== "running") return task;
 
       const cancelled = updateTask(id, {
         status: "error",
         error: "Cancelled by user",
         completedAt: new Date().toISOString(),
       });
-
-      if (!cancelled) {
-        throw new Error(`Task '${id}' not found`);
-      }
-
+      if (!cancelled) throw new Error(`Task '${id}' not found`);
       return cancelled;
     });
   }
 
+  // ─── Council operations ─────────────────────────────────────────────────
+
   async startCouncil(input: TeamsCouncilStartInput): Promise<{ sessionId: string }> {
-    await this.ensureDaemonRunning();
-    return startCouncilViaDaemon(input.prompt, {
+    return runCouncilSession({
+      prompt: input.prompt,
       message: input.message,
       participantNames: input.participantNames,
       maxTurns: input.maxTurns,
-      projectDir: this.config.projectDir,
     });
   }
 
@@ -366,7 +341,6 @@ export class TeamsRuntimeManager {
           const bTime = Date.parse(b.updatedAt) || Date.parse(b.createdAt) || 0;
           return bTime - aTime;
         });
-
       return sessions;
     });
   }
@@ -374,9 +348,7 @@ export class TeamsRuntimeManager {
   async getCouncilSession(sessionId: string): Promise<TeamsCouncilSessionDetail | null> {
     return this.withProjectContext(() => {
       const meta = loadCouncilSession(sessionId) as TeamsCouncilSessionMeta | null;
-      if (!meta) {
-        return null;
-      }
+      if (!meta) return null;
 
       const turnEntries = Object.keys(meta.turns).sort((a, b) => Number(a) - Number(b));
       const opinionsByTurn: Record<string, TeamsCouncilOpinionRecord[]> = {};
@@ -385,11 +357,8 @@ export class TeamsRuntimeManager {
       for (const turnKey of turnEntries) {
         const turnNumber = Number(turnKey);
         opinionsByTurn[turnKey] = listCouncilOpinions(sessionId, turnNumber) as TeamsCouncilOpinionRecord[];
-
         const synthesis = readCouncilSynthesis(sessionId, turnNumber);
-        if (synthesis) {
-          synthesisByTurn[turnKey] = synthesis;
-        }
+        if (synthesis) synthesisByTurn[turnKey] = synthesis;
       }
 
       return {
@@ -401,75 +370,7 @@ export class TeamsRuntimeManager {
     });
   }
 
-  private async startManagedDaemon(): Promise<TeamsDaemonStatusPayload> {
-    const daemonEntry = this.resolveDaemonEntry();
-    const logPath = getDaemonLogPath();
-
-    mkdirSync(path.dirname(logPath), { recursive: true });
-
-    this.state = "starting";
-    this.lastError = undefined;
-
-    const spawnEnv: Record<string, string | undefined> = {
-      ...process.env,
-      ELECTRON_RUN_AS_NODE: "1",
-      LETTA_BASE_URL: this.config.baseUrl,
-      CI: "1",
-    };
-    if (this.config.apiKey) {
-      spawnEnv.LETTA_API_KEY = this.config.apiKey;
-    } else {
-      delete spawnEnv.LETTA_API_KEY;
-    }
-
-    const logFile = openSync(logPath, "a");
-    const CREATE_NO_WINDOW = 0x08000000;
-    const child = spawn(process.execPath, [daemonEntry], {
-      cwd: this.config.projectDir,
-      env: spawnEnv,
-      stdio: ["ignore", logFile, logFile],
-      windowsHide: true,
-      ...(process.platform === "win32" && { CREATE_NO_WINDOW }),
-    });
-
-    this.child = child;
-
-    child.on("error", (error) => {
-      this.lastError = error.message;
-      this.child = null;
-      this.state = "crashed";
-    });
-
-    child.on("exit", (code, signal) => {
-      this.child = null;
-      if (this.state === "stopping") {
-        this.state = "stopped";
-        return;
-      }
-
-      if (code === 0 || signal === "SIGTERM") {
-        this.state = "stopped";
-        return;
-      }
-
-      this.lastError = `Teams daemon exited (code=${code}, signal=${signal ?? "none"})`;
-      this.state = "crashed";
-    });
-
-    const ready = await waitForDaemon(10000);
-    if (!ready) {
-      this.lastError = `Teams daemon failed to start. Check log file: ${logPath}`;
-      this.state = "crashed";
-      if (this.child && !this.child.killed) {
-        this.child.kill("SIGKILL");
-      }
-      this.child = null;
-      throw new Error(this.lastError);
-    }
-
-    this.state = "running";
-    return this.getDaemonStatus();
-  }
+  // ─── Private ────────────────────────────────────────────────────────────
 
   private applyRuntimeContext(): void {
     process.env.LETTA_BASE_URL = this.config.baseUrl;
@@ -481,17 +382,9 @@ export class TeamsRuntimeManager {
     setProjectDir(this.config.projectDir);
   }
 
-  private withProjectContext<T>(fn: () => T): Promise<T> {
+  private async withProjectContext<T>(fn: () => T): Promise<T> {
     this.applyRuntimeContext();
     return Promise.resolve(fn());
-  }
-
-  private resolveDaemonEntry(): string {
-    const daemonEntry = path.join(__dirname, "teams-daemon.js");
-    if (!existsSync(daemonEntry)) {
-      throw new Error(`Teams daemon entry not found at ${daemonEntry}`);
-    }
-    return daemonEntry;
   }
 }
 

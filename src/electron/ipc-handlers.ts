@@ -28,43 +28,30 @@ function broadcast(event: ServerEvent) {
   }
 }
 
-// ── Tool Approval Resolver Map ────────────────────────────────────────
-// When canUseTool fires, we broadcast a permission.request to the UI and
-// store the resolve function. The UI responds with permission.response,
-// which calls the stored resolver.
-let toolUseIdCounter = 0;
-const pendingResolvers = new Map<string, (response: CanUseToolResponse) => void>();
-
 // ── Session Manager ─────────────────────────────────────────────────────────
+// Lazily initialized so canUseTool can reference it (avoid TDZ).
+let sessionManager: SessionManager;
+
 const canUseTool: CanUseToolWithSession = async (conversationId, toolName, toolInput): Promise<CanUseToolResponse> => {
   // AskUserQuestion always requires runtime user input we can't surface yet
   if (toolName === "AskUserQuestion") {
     return { behavior: "deny", message: "AskUserQuestion not yet supported in the UI" };
   }
 
-  const toolUseId = `tool-${++toolUseIdCounter}`;
+  const toolUseId = sessionManager.generateToolUseId();
   const sessionId = conversationId;
 
   return new Promise<CanUseToolResponse>((resolve) => {
-    pendingResolvers.set(toolUseId, resolve);
+    sessionManager.setPendingResolver(toolUseId, resolve);
 
     broadcast({
       type: "permission.request",
       payload: { sessionId, toolUseId, toolName, input: toolInput },
     });
-
-    // Timeout: if the UI doesn't respond within 120s, deny automatically.
-    setTimeout(() => {
-      const resolver = pendingResolvers.get(toolUseId);
-      if (resolver) {
-        pendingResolvers.delete(toolUseId);
-        resolver({ behavior: "deny", message: "Tool approval timed out" });
-      }
-    }, 120_000);
   });
 };
 
-const sessionManager = new SessionManager({
+sessionManager = new SessionManager({
   onEvent: broadcast,
   canUseTool,
   // Don't use bypassPermissions — we want canUseTool to be called so the
@@ -151,11 +138,8 @@ export async function handleClientEvent(event: ClientEvent) {
     const { sessionId, toolUseId, result } = event.payload;
     debug("permission.response", { sessionId, toolUseId, behavior: result.behavior });
 
-    const resolver = pendingResolvers.get(toolUseId);
-    if (resolver) {
-      pendingResolvers.delete(toolUseId);
-      resolver(result);
-    } else {
+    const resolved = sessionManager.resolvePendingTool(toolUseId, result);
+    if (!resolved) {
       log("permission.response: no pending resolver for", { toolUseId });
     }
     return;

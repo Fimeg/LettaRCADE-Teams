@@ -50,11 +50,11 @@ type OperatorProfileData = {
     updatedAt: number;
 }
 
-type TeamsTaskState = import("letta-teams-sdk").TaskState;
-type TeamsTeammateState = import("letta-teams-sdk").TeammateState;
-type TeamsSpawnInput = import("letta-teams-sdk").SpawnTeammateInput;
-type TeamsDispatchInput = import("letta-teams-sdk").DispatchTaskInput;
-type TeamsTaskStatus = import("letta-teams-sdk").TaskStatus;
+type TeamsTaskState = import("letta-teams/types").TaskState;
+type TeamsTeammateState = import("letta-teams/types").TeammateState;
+type TeamsSpawnInput = import("letta-teams/types").SpawnTeammateInput;
+type TeamsDispatchInput = import("letta-teams/types").DispatchTaskInput;
+type TeamsTaskStatus = import("letta-teams/types").TaskStatus;
 
 type TeamsCouncilSessionStatus = "running" | "decided" | "max_turns" | "error";
 type TeamsCouncilVote = "agree" | "disagree";
@@ -157,6 +157,7 @@ type EventPayloadMapping = {
     "letta-code:stop": LettaCodeStatusPayload;
     "letta:health-check": HealthCheckResult;
     "teams:configure": TeamsRuntimeSnapshot;
+    "teams:agent-teammate-map": Record<string, string>;
     "teams:daemon:get-status": TeamsDaemonStatusPayload;
     "teams:daemon:ensure-running": TeamsDaemonStatusPayload;
     "teams:teammates:list": TeamsTeammateState[];
@@ -222,6 +223,7 @@ interface Window {
             onLog: (callback: (entry: { stream: "stdout" | "stderr"; line: string }) => void) => UnsubscribeFunction;
         };
         teams: {
+            getAgentTeammateMap: () => Promise<Record<string, string>>;
             configure: (input?: Partial<TeamsRuntimeConfig>) => Promise<TeamsRuntimeSnapshot>;
             getDaemonStatus: () => Promise<TeamsDaemonStatusPayload>;
             ensureDaemonRunning: () => Promise<TeamsDaemonStatusPayload>;

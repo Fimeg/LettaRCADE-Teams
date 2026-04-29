@@ -7,7 +7,7 @@
 
 import * as React from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
-import { Star, ChevronRight, Wrench, Clock, AlertTriangle, Database } from 'lucide-react';
+import { Star, ChevronRight, Wrench, Clock, AlertTriangle, Database, Users } from 'lucide-react';
 import { cn } from '../../../utils/cn';
 import {
   Card,
@@ -34,6 +34,8 @@ export interface AgentCardAgent {
   lastRun?: string | null;
   memfsEnabled?: boolean;
   staleConversationCount?: number;
+  /** If this agent is also a Teams teammate, the teammate name. */
+  teammateName?: string;
   // Optional health data for memory pressure display
   health?: {
     memoryPressure: number; // 0-100
@@ -258,6 +260,12 @@ const AgentCard = React.forwardRef<HTMLDivElement, AgentCardProps>(
                 <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium uppercase bg-emerald-100 text-emerald-700">
                   <Icon icon={Database} size="sm" className="mr-0.5 h-3 w-3" />
                   memfs
+                </span>
+              )}
+              {agent.teammateName && (
+                <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium uppercase bg-purple-100 text-purple-700">
+                  <Icon icon={Users} size="sm" className="mr-0.5 h-3 w-3" />
+                  team
                 </span>
               )}
             </div>

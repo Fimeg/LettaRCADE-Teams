@@ -2,6 +2,7 @@ import { useMemo, useState, type FormEvent } from 'react';
 import { Loader2, RefreshCw, Users, Workflow } from 'lucide-react';
 import { Button } from '../ui/primitives/Button';
 import { Input } from '../ui/primitives/Input';
+import { FormField } from '../ui/composites/FormField';
 import { SplitPaneDivider, SplitPaneGroup, SplitPanePanel } from '../ui/layout/SplitPane';
 import { cn } from '../../utils/cn';
 import CouncilSessionDetail from './CouncilSessionDetail';
@@ -82,26 +83,24 @@ export function TeamsCouncilsView({
         </div>
 
         <form className="space-y-4" onSubmit={handleSubmit}>
-          <div>
-            <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Prompt</label>
+          <FormField label="Prompt">
             <textarea
               value={form.prompt}
               onChange={(event) => setForm((current) => ({ ...current, prompt: event.target.value }))}
               placeholder="Should we refactor the session lifecycle before adding workflow automation?"
               className="min-h-28 w-full rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-sm text-ink-900 outline-none transition-colors placeholder:text-ink-400 focus:ring-2 focus:ring-accent/50"
             />
-          </div>
+          </FormField>
 
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_160px]">
-            <div>
-              <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Operator message (optional)</label>
+            <FormField label="Operator message (optional)">
               <textarea
                 value={form.message}
                 onChange={(event) => setForm((current) => ({ ...current, message: event.target.value }))}
                 placeholder="Prioritize user-facing impact and call out any migration risks."
                 className="min-h-24 w-full rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-sm text-ink-900 outline-none transition-colors placeholder:text-ink-400 focus:ring-2 focus:ring-accent/50"
               />
-            </div>
+            </FormField>
 
             <div>
               <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">Max turns</label>

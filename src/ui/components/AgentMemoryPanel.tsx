@@ -8,6 +8,11 @@ import { SacredToggle } from "./SacredToggle";
 import { MemfsFileTree } from "./MemfsFileTree";
 import { getLettaClient, getApiBase } from "../services/api";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { Modal, ModalContent, ModalHeader, ModalTitle, ModalFooter } from "./ui/composites/Modal";
+import { Input, inputVariants } from "./ui/primitives/Input";
+import { Button } from "./ui/primitives/Button";
+import { Alert } from "./ui/composites/Alert";
+import { FormField } from "./ui/composites/FormField";
 
 interface AgentMemoryPanelProps {
   agentId: string;
@@ -83,6 +88,13 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
     [agent],
   );
 
+  // File tree confirmation and error state — replaces window.confirm/alert
+  const [detachConfirm, setDetachConfirm] = useState<{ blockId: string; label: string } | null>(null);
+  const [newBlockModal, setNewBlockModal] = useState(false);
+  const [newBlockLabel, setNewBlockLabel] = useState('');
+  const [blockError, setBlockError] = useState<string | null>(null);
+  const [memfsError, setMemfsError] = useState<string | null>(null);
+
   const residency = useMemo(() => {
     const base = getApiBase();
     let host = base;
@@ -103,6 +115,37 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
     if (!block.id) throw new Error('Block creation returned no id');
     await client.agents.blocks.attach(block.id, { agent_id: agentId });
     return block;
+  };
+
+  const doCreateBlock = async () => {
+    const trimmed = newBlockLabel.trim();
+    if (!trimmed) return;
+    if (memoryBlocks.some((b) => b.label === trimmed)) {
+      setBlockError(`A block with label "${trimmed}" already exists on this agent.`);
+      return;
+    }
+    try {
+      await createAndAttachBlock(trimmed, '');
+      await loadAgent(agentId);
+      setNewBlockModal(false);
+      setNewBlockLabel('');
+      setBlockError(null);
+    } catch (err) {
+      setBlockError(`Failed to create block: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  const doDetachBlock = async () => {
+    if (!detachConfirm) return;
+    try {
+      await getLettaClient().agents.blocks.detach(detachConfirm.blockId, { agent_id: agentId });
+      await loadAgent(agentId);
+      setDetachConfirm(null);
+    } catch (err) {
+      console.error('[AgentMemoryPanel] delete failed:', err);
+      setMemfsError(`Failed to delete: ${err instanceof Error ? err.message : String(err)}`);
+      setDetachConfirm(null);
+    }
   };
 
   // ═══ Archival Memory API Functions ═══
@@ -441,6 +484,13 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
             {/* Core view: Blocks or File Tree */}
             {coreViewMode === "files" && supportsMemfs ? (
               <div className="rounded-xl border border-ink-900/10 overflow-hidden" style={{ height: '400px' }}>
+                {memfsError && (
+                  <div className="p-3">
+                    <Alert variant="error" dismissible onDismiss={() => setMemfsError(null)}>
+                      {memfsError}
+                    </Alert>
+                  </div>
+                )}
                 <MemfsFileTree
                   blocks={memoryBlocks}
                   onUpdateFile={async (path, content) => {
@@ -452,7 +502,7 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
                       await loadAgent(agentId);
                     } catch (err) {
                       console.error('[AgentMemoryPanel] create file failed:', err);
-                      alert(`Failed to create file: ${err instanceof Error ? err.message : String(err)}`);
+                      setMemfsError(`Failed to create file: ${err instanceof Error ? err.message : String(err)}`);
                     }
                   }}
                   onCreateFolder={async (path) => {
@@ -465,7 +515,7 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
                       await loadAgent(agentId);
                     } catch (err) {
                       console.error('[AgentMemoryPanel] create folder failed:', err);
-                      alert(`Failed to create folder: ${err instanceof Error ? err.message : String(err)}`);
+                      setMemfsError(`Failed to create folder: ${err instanceof Error ? err.message : String(err)}`);
                     }
                   }}
                   onDeleteNode={async (path) => {
@@ -474,14 +524,7 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
                       console.warn('[AgentMemoryPanel] delete: no block found for path', path);
                       return;
                     }
-                    if (!confirm(`Detach "${path}" from this agent? The block remains in your library; this only removes it from this agent.`)) return;
-                    try {
-                      await getLettaClient().agents.blocks.detach(block.id, { agent_id: agentId });
-                      await loadAgent(agentId);
-                    } catch (err) {
-                      console.error('[AgentMemoryPanel] delete failed:', err);
-                      alert(`Failed to delete: ${err instanceof Error ? err.message : String(err)}`);
-                    }
+                    setDetachConfirm({ blockId: block.id, label: path });
                   }}
                 />
               </div>
@@ -492,21 +535,9 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
                     {memoryBlocks.length} block{memoryBlocks.length === 1 ? '' : 's'}
                   </span>
                   <button
-                    onClick={async () => {
-                      const label = prompt('New block label (use slash-paths for memfs, e.g. "system/skills/git.md"):');
-                      if (!label) return;
-                      const trimmed = label.trim();
-                      if (!trimmed) return;
-                      if (memoryBlocks.some((b) => b.label === trimmed)) {
-                        alert(`A block with label "${trimmed}" already exists on this agent.`);
-                        return;
-                      }
-                      try {
-                        await createAndAttachBlock(trimmed, '');
-                        await loadAgent(agentId);
-                      } catch (err) {
-                        alert(`Failed to create block: ${err instanceof Error ? err.message : String(err)}`);
-                      }
+                    onClick={() => {
+                      setNewBlockLabel('');
+                      setNewBlockModal(true);
                     }}
                     className="px-2 py-1 rounded-md text-xs font-medium text-accent hover:bg-accent/10 transition-colors"
                   >
@@ -614,19 +645,21 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
                         {isEditing ? (
                           /* Edit mode */
                           <div className="space-y-3">
-                            <textarea
-                              value={editing.draftValue}
-                              onChange={(e) =>
-                                setEditing((prev) => ({
-                                  ...prev,
-                                  draftValue: e.target.value,
-                                }))
-                              }
-                              rows={8}
-                              disabled={editing.isSaving}
-                              className="w-full rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-xs font-mono text-ink-800 focus:border-accent focus:outline-none resize-vertical disabled:opacity-50"
-                              placeholder={`Enter ${block.label} memory content...`}
-                            />
+                            <FormField label={`Edit ${block.label}`}>
+                              <textarea
+                                value={editing.draftValue}
+                                onChange={(e) =>
+                                  setEditing((prev) => ({
+                                    ...prev,
+                                    draftValue: e.target.value,
+                                  }))
+                                }
+                                rows={8}
+                                disabled={editing.isSaving}
+                                className={inputVariants({ size: 'sm' }) + ' resize-vertical font-mono disabled:opacity-50'}
+                                placeholder={`Enter ${block.label} memory content...`}
+                              />
+                            </FormField>
 
                             {/* Character count */}
                             <div className="flex items-center justify-between">
@@ -733,13 +766,15 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
 
             {/* Insert passage */}
             <div className="space-y-2">
-              <textarea
-                value={newPassageText}
-                onChange={(e) => setNewPassageText(e.target.value)}
-                placeholder="Add a passage to archival memory..."
-                rows={3}
-                className="w-full rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-xs text-ink-800 focus:border-accent focus:outline-none resize-vertical"
-              />
+              <FormField label="New Passage">
+                <textarea
+                  value={newPassageText}
+                  onChange={(e) => setNewPassageText(e.target.value)}
+                  placeholder="Add a passage to archival memory..."
+                  rows={3}
+                  className={inputVariants({ size: 'sm' }) + ' resize-vertical'}
+                />
+              </FormField>
               <button
                 onClick={insertPassage}
                 disabled={isInserting || !newPassageText.trim()}
@@ -761,13 +796,14 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
 
             {/* Search */}
             <div className="flex gap-2">
-              <input
+              <Input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && searchArchival()}
                 placeholder="Search archival memory..."
-                className="flex-1 rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-xs text-ink-800 focus:border-accent focus:outline-none"
+                size="sm"
+                className="flex-1"
               />
               <button
                 onClick={searchArchival}
@@ -861,6 +897,41 @@ export function AgentMemoryPanel({ agentId }: AgentMemoryPanelProps) {
         )}
 
       </div>
+
+      {/* Detach block confirmation — replaces window.confirm */}
+      <ConfirmDialog
+        open={!!detachConfirm}
+        title={`Detach "${detachConfirm?.label}"?`}
+        message={`Detach "${detachConfirm?.label}" from this agent? The block remains in your library; this only removes it from this agent.`}
+        confirmLabel="Detach"
+        variant="default"
+        onCancel={() => setDetachConfirm(null)}
+        onConfirm={doDetachBlock}
+      />
+
+      {/* New block modal — replaces window.prompt + alert */}
+      <Modal open={newBlockModal} onOpenChange={(open) => { if (!open) { setNewBlockModal(false); setBlockError(null); } }}>
+        <ModalContent size="sm">
+          <ModalHeader>
+            <ModalTitle>New memory block</ModalTitle>
+          </ModalHeader>
+          <div className="mt-4 space-y-3">
+            <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500">
+              Block label (use slash-paths for memfs, e.g. "system/skills/git.md")
+            </label>
+            <Input
+              value={newBlockLabel}
+              onChange={(event) => { setNewBlockLabel(event.target.value); setBlockError(null); }}
+              placeholder="system/skills/git.md"
+            />
+            {blockError && <p className="text-xs text-status-error" role="alert">{blockError}</p>}
+          </div>
+          <ModalFooter>
+            <Button variant="secondary" onClick={() => { setNewBlockModal(false); setBlockError(null); }}>Cancel</Button>
+            <Button variant="primary" onClick={() => void doCreateBlock()}>Create block</Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
 
       {/* Memory block edit confirmation — prevents accidental clobbering */}
       <ConfirmDialog

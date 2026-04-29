@@ -1,4 +1,4 @@
-import type { TaskState, TaskStatus, TeammateState } from 'letta-teams-sdk';
+import type { TaskState, TaskStatus, TeammateState } from 'letta-teams/types';
 
 export const teammateStatusClasses: Record<TeammateState['status'], string> = {
   idle: 'bg-slate-100 text-slate-700',

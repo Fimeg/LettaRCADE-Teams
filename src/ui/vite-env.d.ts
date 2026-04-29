@@ -2,7 +2,7 @@
 
 // Type imports for electron API
 import type { LettaCodeStatusPayload } from '../electron/letta-code-manager.js';
-import type { DispatchTaskInput, SpawnTeammateInput, TaskStatus } from 'letta-teams-sdk';
+import type { DispatchTaskInput, SpawnTeammateInput, TaskStatus } from 'letta-teams/types';
 
 declare global {
   interface Window {
@@ -38,6 +38,7 @@ declare global {
         onLog: (callback: (entry: { stream: "stdout" | "stderr"; line: string }) => void) => () => void;
       };
       teams: {
+        getAgentTeammateMap: () => Promise<Record<string, string>>;
         configure: (input?: Partial<TeamsRuntimeConfig>) => Promise<TeamsRuntimeSnapshot>;
         getDaemonStatus: () => Promise<TeamsDaemonStatusPayload>;
         ensureDaemonRunning: () => Promise<TeamsDaemonStatusPayload>;

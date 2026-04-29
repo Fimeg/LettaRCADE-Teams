@@ -17,6 +17,9 @@ import { ToolApprovalDialog } from "./ToolApprovalDialog";
 import ConnectionModeIndicator, { ConnectionMode } from "./ConnectionModeIndicator";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { useAgentNickname } from "../hooks/useAgentNickname";
+import { Input } from "./ui/primitives/Input";
+import { FormField } from "./ui/composites/FormField";
+import { inputVariants } from "./ui/primitives/Input";
 
 const SCROLL_THRESHOLD = 50;
 const STALE_CONVERSATION_DAYS = 14;
@@ -667,7 +670,7 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
         tags: t.tags || [],
       })));
     } catch (err) {
-      console.error('Failed to load tools:', err);
+      console.error('[AgentWorkspace] Failed to load tools:', err);
     } finally {
       setLoadingTools(false);
     }
@@ -679,7 +682,9 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
       await getLettaClient().agents.tools.attach(toolId, { agent_id: agentId });
       await loadAgentTools();
     } catch (err) {
-      console.error('Failed to attach tool:', err);
+      console.error('[AgentWorkspace] Failed to attach tool:', err);
+      setSaveMessage(`Failed to attach tool: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      setTimeout(() => setSaveMessage(null), 3000);
     } finally {
       setToolActionPending(null);
     }
@@ -687,11 +692,15 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
 
   const detachTool = async (toolId: string) => {
     setToolActionPending(toolId);
+    const previousTools = agentTools;
     try {
       await getLettaClient().agents.tools.detach(toolId, { agent_id: agentId });
       setAgentTools(prev => prev.filter(t => t.id !== toolId));
     } catch (err) {
-      console.error('Failed to detach tool:', err);
+      console.error('[AgentWorkspace] Failed to detach tool:', err);
+      setAgentTools(previousTools); // Revert optimistic removal
+      setSaveMessage(`Failed to detach tool: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      setTimeout(() => setSaveMessage(null), 3000);
     } finally {
       setToolActionPending(null);
     }
@@ -706,7 +715,9 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
         setActiveConversationId(conv.id);
       }
     } catch (err) {
-      console.error('Failed to create conversation:', err);
+      console.error('[AgentWorkspace] Failed to create conversation:', err);
+      setSaveMessage(`Failed to create conversation: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      setTimeout(() => setSaveMessage(null), 3000);
     }
   };
 
@@ -959,18 +970,21 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
           {/* Conversation Selector */}
           {agent.conversations && agent.conversations.length > 0 && (
             <div className="flex items-center gap-1">
-              <select
-                value={activeConversationId || ""}
-                onChange={(e) => setActiveConversationId(e.target.value || null)}
-                className="px-3 py-1.5 text-sm bg-surface-cream border border-ink-900/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-accent/50 max-w-[18rem]"
-                title="Conversation selector — labels prefer the upstream summary, fall back to short id"
-              >
-                {agent.conversations.map((conv) => (
-                  <option key={conv.id} value={conv.id}>
-                    {formatConversationOption(conv)}
-                  </option>
-                ))}
-              </select>
+              <FormField label="Conversation" layout="horizontal" className="items-center">
+                <select
+                  value={activeConversationId || ""}
+                  onChange={(e) => setActiveConversationId(e.target.value || null)}
+                  className={inputVariants({ size: 'sm' }) + ' max-w-[18rem]'}
+                  title="Conversation selector — labels prefer the upstream summary, fall back to short id"
+                  aria-label="Select conversation"
+                >
+                  {agent.conversations.map((conv) => (
+                    <option key={conv.id} value={conv.id}>
+                      {formatConversationOption(conv)}
+                    </option>
+                  ))}
+                </select>
+              </FormField>
               {activeConversationId && (() => {
                 const activeConv = agent.conversations.find((c) => c.id === activeConversationId);
                 const stale = activeConv ? isConversationStale(activeConv) : false;
@@ -1182,12 +1196,14 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
                 <div className="space-y-3">
                   {editingSystem ? (
                     <>
-                      <textarea
-                        value={systemDraft}
-                        onChange={e => setSystemDraft(e.target.value)}
-                        rows={20}
-                        className="w-full rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-xs font-mono text-ink-800 focus:border-accent focus:outline-none resize-vertical"
-                      />
+                      <FormField label="System Prompt">
+                        <textarea
+                          value={systemDraft}
+                          onChange={e => setSystemDraft(e.target.value)}
+                          rows={20}
+                          className={inputVariants({ size: 'sm' }) + ' resize-vertical font-mono'}
+                        />
+                      </FormField>
                       <div className="flex gap-2">
                         <button
                           onClick={saveSystem}
@@ -1245,12 +1261,13 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
                   {showToolBrowser ? (
                     <div className="mt-4 space-y-2">
                       <div className="flex gap-2">
-                        <input
+                        <Input
                           type="text"
                           value={toolFilter}
                           onChange={e => setToolFilter(e.target.value)}
                           placeholder="Filter tools..."
-                          className="flex-1 rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-xs text-ink-800 focus:border-accent focus:outline-none"
+                          size="sm"
+                          className="flex-1"
                         />
                         <button
                           onClick={() => setShowToolBrowser(false)}
@@ -1589,16 +1606,15 @@ function ConfigField({ label, value, onChange, type = 'text', mono, hint }: {
   type?: string; mono?: boolean; hint?: string;
 }) {
   return (
-    <div className="space-y-1">
-      <label className="text-xs font-medium text-ink-700">{label}</label>
-      <input
+    <FormField label={label} helperText={hint}>
+      <Input
         type={type}
         value={value}
         onChange={e => onChange(e.target.value)}
-        className={`w-full rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-xs text-ink-800 focus:border-accent focus:outline-none ${mono ? 'font-mono' : ''}`}
+        size="sm"
+        className={mono ? 'font-mono' : ''}
       />
-      {hint && <span className="text-[10px] text-ink-500">{hint}</span>}
-    </div>
+    </FormField>
   );
 }
 
@@ -1620,16 +1636,15 @@ function ConfigSelect({ label, value, onChange, options }: {
   label: string; value: string; onChange: (v: string) => void; options: string[];
 }) {
   return (
-    <div className="space-y-1">
-      <label className="text-xs font-medium text-ink-700">{label}</label>
+    <FormField label={label} layout="horizontal" className="items-center">
       <select
         value={value}
         onChange={e => onChange(e.target.value)}
-        className="w-full rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-xs text-ink-800 focus:border-accent focus:outline-none"
+        className={inputVariants({ size: 'sm' })}
       >
         {options.map(o => <option key={o} value={o}>{o || '(default)'}</option>)}
       </select>
-    </div>
+    </FormField>
   );
 }
 

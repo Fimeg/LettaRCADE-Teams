@@ -1,5 +1,5 @@
 import electron from "electron";
-import type { DispatchTaskInput, SpawnTeammateInput, TaskStatus } from "letta-teams-sdk";
+import type { DispatchTaskInput, SpawnTeammateInput, TaskStatus } from "letta-teams/types";
 import type { TeamsConfigureInput, TeamsCouncilStartInput } from "./teams-runtime.js";
 
 electron.contextBridge.exposeInMainWorld("electron", {
@@ -72,6 +72,8 @@ electron.contextBridge.exposeInMainWorld("electron", {
     },
 
     teams: {
+        getAgentTeammateMap: () =>
+            ipcInvoke("teams:agent-teammate-map"),
         configure: (input: TeamsConfigureInput = {}) =>
             ipcInvoke("teams:configure", input),
         getDaemonStatus: () =>

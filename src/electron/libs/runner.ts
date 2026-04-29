@@ -57,6 +57,10 @@ export class SessionManager {
   /** Set before each send() so the wrapped canUseTool callback knows which
    *  conversation the tool belongs to. */
   private currentApprovalConversationId = "";
+  /** Tool approval resolver state — lives on the instance so it's cleaned up
+   *  when the session manager is destroyed (not module-level mutable state). */
+  private toolUseIdCounter = 0;
+  private pendingResolvers = new Map<string, (response: CanUseToolResponse) => void>();
 
   constructor(options: {
     onEvent: (event: ServerEvent) => void;
@@ -66,6 +70,35 @@ export class SessionManager {
     this.onEvent = options.onEvent;
     this.canUseTool = options.canUseTool;
     this.permissionMode = options.permissionMode ?? "bypassPermissions";
+  }
+
+  /** Generate a unique tool use ID for permission requests. */
+  generateToolUseId(): string {
+    return `tool-${++this.toolUseIdCounter}`;
+  }
+
+  /** Store a resolver for a pending tool approval request. */
+  setPendingResolver(toolUseId: string, resolver: (response: CanUseToolResponse) => void, timeoutMs = 120_000): void {
+    this.pendingResolvers.set(toolUseId, resolver);
+    // Auto-deny if UI never responds
+    setTimeout(() => {
+      const r = this.pendingResolvers.get(toolUseId);
+      if (r) {
+        this.pendingResolvers.delete(toolUseId);
+        r({ behavior: "deny", message: "Tool approval timed out" });
+      }
+    }, timeoutMs);
+  }
+
+  /** Resolve a pending tool approval by ID. Returns true if resolver was found. */
+  resolvePendingTool(toolUseId: string, result: CanUseToolResponse): boolean {
+    const resolver = this.pendingResolvers.get(toolUseId);
+    if (resolver) {
+      this.pendingResolvers.delete(toolUseId);
+      resolver(result);
+      return true;
+    }
+    return false;
   }
 
   /** Wrap the extended callback into the SDK's CanUseToolCallback shape,
