@@ -44,7 +44,6 @@ import {
   Server,
   Globe,
   Laptop,
-  Radio,
   Plus,
   RefreshCw,
   Trash2,
@@ -58,6 +57,8 @@ import {
   Settings2,
   Code2,
   Shield,
+  ArrowRightLeft,
+  Zap,
 } from 'lucide-react';
 
 // =============================================================================
@@ -300,25 +301,26 @@ function ConnectionSection() {
 
   const modeCards = [
     {
-      mode: 'server' as ConnectionMode,
-      icon: Server,
-      title: 'Server Mode',
-      description: 'Connect to an external Letta server (production or shared)',
-      color: 'blue',
-    },
-    {
-      mode: 'local' as ConnectionMode,
-      icon: Laptop,
-      title: 'Local Mode',
-      description: 'Spawn letta-code locally and connect to localhost',
+      mode: 'direct' as const,
+      icon: ArrowRightLeft,
+      title: 'Direct',
+      description: 'Connect directly to your Letta server (default: localhost)',
       color: 'green',
     },
     {
-      mode: 'remote' as ConnectionMode,
-      icon: Radio,
-      title: 'Remote Mode',
-      description: 'Connect to a user-provided remote URL',
+      mode: 'server' as ConnectionMode,
+      icon: Server,
+      title: 'Server',
+      description: 'Connect to a configured external Letta server',
+      color: 'blue',
+    },
+    {
+      mode: 'teleport' as const,
+      icon: Zap,
+      title: 'Teleport',
+      description: 'Remote control agents across devices (coming with LACE)',
       color: 'purple',
+      teaser: true,
     },
   ];
 
@@ -332,18 +334,48 @@ function ConnectionSection() {
       {/* Connection Mode Cards */}
       <SubSection title="Connection Mode">
         <div className="grid grid-cols-3 gap-4">
-          {modeCards.map(({ mode, icon: Icon, title, description, color }) => {
-            const isActive = connectionMode === mode;
+          {modeCards.map(({ mode, icon: Icon, title, description, color, teaser }) => {
+            // Direct mode is active for both 'local' and 'remote'
+            const isActive = mode === 'direct'
+              ? (connectionMode === 'local' || connectionMode === 'remote')
+              : connectionMode === mode;
             const colorClasses = {
               blue: isActive ? 'ring-2 ring-blue-500 bg-blue-50/50' : 'hover:border-blue-300',
               green: isActive ? 'ring-2 ring-green-500 bg-green-50/50' : 'hover:border-green-300',
               purple: isActive ? 'ring-2 ring-purple-500 bg-purple-50/50' : 'hover:border-purple-300',
             };
 
+            // Teaser card (Teleport) - non-clickable
+            if (teaser) {
+              return (
+                <div
+                  key={mode}
+                  className="p-4 rounded-xl border border-dashed border-ink-900/20 opacity-60 cursor-not-allowed"
+                >
+                  <div className="w-10 h-10 rounded-lg flex items-center justify-center mb-3 bg-ink-100 text-ink-500">
+                    <Icon className="w-5 h-5" />
+                  </div>
+                  <h4 className="font-medium text-ink-700 mb-1 flex items-center gap-2">
+                    {title}
+                    <span className="px-1.5 py-0.5 text-[10px] font-medium bg-ink-100 text-ink-500 rounded-full">
+                      Soon
+                    </span>
+                  </h4>
+                  <p className="text-xs text-ink-500">{description}</p>
+                </div>
+              );
+            }
+
             return (
               <button
                 key={mode}
-                onClick={() => handleModeChange(mode)}
+                onClick={() => {
+                  if (mode === 'direct') {
+                    handleModeChange('local');
+                  } else if (mode !== 'teleport') {
+                    handleModeChange(mode);
+                  }
+                }}
                 className={`p-4 rounded-xl border text-left transition-all ${
                   isActive ? colorClasses[color as keyof typeof colorClasses] : 'border-ink-900/10 hover:border-ink-900/20'
                 }`}

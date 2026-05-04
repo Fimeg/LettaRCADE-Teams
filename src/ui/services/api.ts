@@ -27,7 +27,7 @@ import { Letta } from "@letta-ai/letta-client";
 
 let clientInstance: Letta | null = null;
 
-export type ConnectionMode = 'server' | 'local' | 'remote' | 'teleport';
+export type ConnectionMode = 'server' | 'local' | 'remote';
 
 export function getConnectionMode(): ConnectionMode {
   if (typeof window === 'undefined') return 'server';

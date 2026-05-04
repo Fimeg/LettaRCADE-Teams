@@ -1,6 +1,8 @@
 /**
- * ConnectionModeIndicator — Compact connection mode selector
- * Three modes: Direct (Local+Remote merged), Server (Letta Cloud), Teleport (teaser)
+ * ConnectionModeIndicator — toggles between three connection modes:
+ * - Server: Direct HTTP SDK calls to the external Letta server
+ * - Local: Spawn letta-code CLI locally (if not running), connect to localhost:8283
+ * - Remote: Connect to user-provided remote Letta server URL
  *
  * All modes use direct HTTP REST API via getLettaClient().
  */
@@ -8,16 +10,14 @@
 import { useState, useEffect } from "react";
 import { useLettaCodeSpawn } from "../hooks/useLettaCodeSpawn";
 import { useAppStore } from "../store/useAppStore";
-import { getApiKeyAsync, type ConnectionMode as ApiConnectionMode } from "../services/api";
+import { getApiKeyAsync } from "../services/api";
 import { Input } from "./ui/primitives/Input";
-import { Globe, Cloud, Zap, ArrowRightLeft } from "lucide-react";
 
-// Re-export ConnectionMode for consumers (matches api.ts)
-export type ConnectionMode = ApiConnectionMode;
+export type ConnectionMode = "server" | "local" | "remote" | "teleport";
 
-// Unified persistence keys (match api.ts)
-const MODE_STORAGE_KEY = "letta_connection_mode";
-const REMOTE_URL_STORAGE_KEY = "letta_remote_url";
+// Persistence keys
+const MODE_STORAGE_KEY = "letta:connection-mode";
+const REMOTE_URL_STORAGE_KEY = "letta:remote-server-url";
 
 interface Props {
   /** Controlled mode - if not provided, component manages its own state */
@@ -32,8 +32,6 @@ interface Props {
    *  the operator's memfs URL template and (b) read any per-agent metadata
    *  override (`agent.metadata.letta_memfs_git_url`). */
   agentId?: string;
-  /** Compact mode - smaller UI for header/status bar placement */
-  compact?: boolean;
 }
 
 export default function ConnectionModeIndicator({
@@ -42,14 +40,13 @@ export default function ConnectionModeIndicator({
   remoteUrl: controlledRemoteUrl,
   onRemoteUrlChange: controlledOnRemoteUrlChange,
   agentId,
-  compact = false,
 }: Props) {
   const { available, status, spawn, stop } = useLettaCodeSpawn();
   const agent = useAppStore((s) => (agentId ? s.agents[agentId] : null));
   const [spawnError, setSpawnError] = useState<string | null>(null);
 
   // Uncontrolled state with persistence - default to LOCAL mode
-  const [internalMode, setInternalMode] = useState<ApiConnectionMode>("local");
+  const [internalMode, setInternalMode] = useState<ConnectionMode>("local");
   const [internalRemoteUrl, setInternalRemoteUrl] = useState<string>("");
 
   // Determine if controlled or uncontrolled
@@ -61,10 +58,10 @@ export default function ConnectionModeIndicator({
 
   // Load persisted state on mount
   useEffect(() => {
-    if (isControlled) return;
+    if (isControlled) return; // Don't load if controlled
 
     try {
-      const savedMode = localStorage.getItem(MODE_STORAGE_KEY) as ApiConnectionMode | null;
+      const savedMode = localStorage.getItem(MODE_STORAGE_KEY) as ConnectionMode | null;
       const savedRemoteUrl = localStorage.getItem(REMOTE_URL_STORAGE_KEY);
       if (savedMode && ["server", "local", "remote"].includes(savedMode)) {
         setInternalMode(savedMode);
@@ -88,6 +85,11 @@ export default function ConnectionModeIndicator({
       // Ignore localStorage errors
     }
   }, [internalMode, internalRemoteUrl, isControlled]);
+
+  // Log status changes for debugging
+  useEffect(() => {
+    console.log("[ConnectionModeIndicator] status changed:", status);
+  }, [status]);
 
   const localDisabled = !available;
   const spawnState = status.status;
@@ -126,25 +128,18 @@ export default function ConnectionModeIndicator({
     }
   };
 
-  const handleDirectUrlChange = (url: string) => {
-    onRemoteUrlChange?.(url);
-    // If URL is localhost, treat as local mode, otherwise remote
-    const isLocalhost = url.includes("localhost") || url.includes("127.0.0.1");
-    const newMode = isLocalhost ? "local" : "remote";
-    if (newMode !== mode) {
-      onModeChange?.(newMode);
-    }
-  };
-
+  // Get server URL based on current mode
   const getServerUrl = async (): Promise<string> => {
+    // First, try to get from localStorage (user-configured)
     let baseUrl = "";
     try {
       baseUrl = localStorage.getItem("letta_api_url") || "";
     } catch {
       // ignore
     }
-
-    if (!baseUrl && typeof window !== "undefined" && window.electron?.getRuntimeEnv) {
+    
+    // If not in localStorage, try to get from main process env (for Electron)
+    if (!baseUrl && typeof window !== 'undefined' && window.electron?.getRuntimeEnv) {
       try {
         const env = await window.electron.getRuntimeEnv();
         baseUrl = env.LETTA_BASE_URL || "";
@@ -152,18 +147,22 @@ export default function ConnectionModeIndicator({
         console.error("[ConnectionModeIndicator] Failed to get runtime env:", err);
       }
     }
-
+    
+    // Fallback to default
     if (!baseUrl) {
       baseUrl = "http://localhost:8283";
     }
 
     switch (mode) {
       case "local":
+        // For Local mode, the CLI runs on localhost but connects to the upstream server
+        // Use the configured server URL (from localStorage or env) as the upstream target
         return baseUrl;
       case "remote":
         return remoteUrl || "";
       case "server":
       default:
+        // For server mode, use the configured API URL
         return baseUrl;
     }
   };
@@ -175,6 +174,9 @@ export default function ConnectionModeIndicator({
     } else {
       try {
         console.log("[ConnectionModeIndicator] Starting spawn...");
+        // Pull per-agent metadata override from the loaded agent record. The
+        // store's `agent.raw` carries the full SDK AgentState; `metadata` is
+        // the freeform server-side field we use for per-agent env overrides.
         const raw = agent?.raw as { metadata?: Record<string, unknown> } | undefined;
         const md = raw?.metadata ?? {};
         const agentMetadataEnv = {
@@ -187,6 +189,7 @@ export default function ConnectionModeIndicator({
           throw new Error("Server URL not configured");
         }
 
+        // Get API key asynchronously (checks main process env for Electron)
         const apiKey = await getApiKeyAsync();
 
         const result = await spawn({
@@ -204,180 +207,100 @@ export default function ConnectionModeIndicator({
     }
   };
 
-  // Compact mode - just a dropdown/status indicator
-  if (compact) {
-    return (
-      <div className="flex items-center gap-2">
-        <div className="relative group">
-          <button className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium text-ink-600 hover:bg-ink-900/5 transition-colors">
-            {mode === "server" && <Cloud className="w-3.5 h-3.5" />}
-            {mode === "local" && <ArrowRightLeft className="w-3.5 h-3.5" />}
-            {mode === "remote" && <Globe className="w-3.5 h-3.5" />}
-            <span>
-              {mode === "server" ? "Cloud" : mode === "local" ? "Local" : "Remote"}
-            </span>
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-3">
+        <div className="flex bg-surface-cream rounded-lg p-1 border border-ink-900/10">
+          <button
+            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+              mode === "server"
+                ? "bg-accent text-white shadow-sm"
+                : "text-ink-600 hover:bg-ink-900/5"
+            }`}
+            onClick={() => handleSwitch("server")}
+            title="Server mode: direct SDK calls to the configured Letta server"
+          >
+            Server
           </button>
-          {/* Dropdown */}
-          <div className="absolute right-0 top-full mt-1 w-48 py-1 bg-surface rounded-lg shadow-lg border border-ink-900/10 hidden group-hover:block z-50">
-            <button
-              onClick={() => handleSwitch("local")}
-              className={`w-full px-3 py-2 text-left text-xs flex items-center gap-2 hover:bg-ink-900/5 ${
-                mode === "local" ? "text-accent bg-accent/5" : "text-ink-700"
-              }`}
-            >
-              <ArrowRightLeft className="w-3.5 h-3.5" />
-              Direct (Local)
-            </button>
-            <button
-              onClick={() => handleSwitch("remote")}
-              className={`w-full px-3 py-2 text-left text-xs flex items-center gap-2 hover:bg-ink-900/5 ${
-                mode === "remote" ? "text-accent bg-accent/5" : "text-ink-700"
-              }`}
-            >
-              <Globe className="w-3.5 h-3.5" />
-              Direct (Custom URL)
-            </button>
-            <button
-              onClick={() => handleSwitch("server")}
-              className={`w-full px-3 py-2 text-left text-xs flex items-center gap-2 hover:bg-ink-900/5 ${
-                mode === "server" ? "text-accent bg-accent/5" : "text-ink-700"
-              }`}
-            >
-              <Cloud className="w-3.5 h-3.5" />
-              Letta Cloud
-            </button>
-            <div className="border-t border-ink-900/10 my-1" />
-            <div className="px-3 py-2 text-xs text-ink-400 flex items-center gap-2">
-              <Zap className="w-3.5 h-3.5" />
-              Teleport (soon)
-            </div>
-          </div>
+          <button
+            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 ${
+              mode === "local"
+                ? "bg-accent text-white shadow-sm"
+                : "text-ink-600 hover:bg-ink-900/5"
+            }`}
+            onClick={() => handleSwitch("local")}
+            disabled={localDisabled}
+            title={
+              localDisabled
+                ? "Local mode requires the desktop app"
+                : "Local mode: spawn letta-code locally and connect to localhost:8283"
+            }
+          >
+            Local
+            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
+            </svg>
+          </button>
+          <button
+            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors opacity-50 cursor-not-allowed ${
+              mode === "teleport"
+                ? "bg-accent text-white shadow-sm"
+                : "text-ink-600"
+            }`}
+            disabled
+            title="Teleport mode: send context to another machine (future feature)"
+          >
+            Teleport
+          </button>
         </div>
+
         {mode === "local" && (
-          <div className={`w-2 h-2 rounded-full ${statusDotClass}`} title={spawnState} />
+          <div className="flex items-center gap-2">
+            <div className={`w-2 h-2 rounded-full ${statusDotClass}`} title={spawnState} />
+            <span className="text-xs text-ink-600">
+              {spawnState === "running" ? "Connected" : 
+               spawnState === "starting" ? "Connecting..." : 
+               spawnState === "stopping" ? "Disconnecting..." : 
+               "Disconnected"}
+            </span>
+            {(status.error || spawnError) && (
+              <div className="flex flex-col gap-1">
+                <span className="text-xs text-red-600 font-semibold">Error:</span>
+                <span
+                  className="text-xs text-red-600 max-w-[400px] break-words font-mono bg-red-50 px-2 py-1 rounded border border-red-200"
+                  title={spawnError || status.error}
+                >
+                  {spawnError || status.error}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+        {mode === "local" && localDisabled && (
+          <span
+            className="text-xs text-amber-600"
+            title="Local mode requires the desktop build. Restart `npm run dev` after pulling these changes so preload is rebuilt."
+          >
+            desktop only — restart dev?
+          </span>
         )}
       </div>
-    );
-  }
 
-  // Full mode - card-based selector
-  return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        {/* Direct Mode Card (Local + Remote merged) */}
-        <button
-          onClick={() => handleSwitch("local")}
-          className={`flex flex-col items-start p-3 rounded-xl border text-left transition-all ${
-            mode === "local" || mode === "remote"
-              ? "border-accent bg-accent/5"
-              : "border-ink-900/10 hover:border-ink-900/20"
-          }`}
-        >
-          <div className="flex items-center gap-2 mb-2">
-            <div className={`p-1.5 rounded-lg ${mode === "local" || mode === "remote" ? "bg-accent/10" : "bg-ink-100"}`}>
-              <ArrowRightLeft className={`w-4 h-4 ${mode === "local" || mode === "remote" ? "text-accent" : "text-ink-600"}`} />
-            </div>
-            <span className="text-sm font-medium text-ink-900">Direct</span>
-            {(mode === "local" || mode === "remote") && (
-              <div className={`w-2 h-2 rounded-full ${statusDotClass}`} />
-            )}
-          </div>
-          <p className="text-xs text-ink-500">
-            Connect directly to a Letta server. Default: localhost:8283
-          </p>
-          {mode === "local" && localDisabled && (
-            <span className="mt-2 text-[10px] text-amber-600">
-              Desktop app required
-            </span>
+      {/* Remote URL input */}
+      {mode === "remote" && (
+        <div className="flex items-center gap-2 pl-1">
+          <span className="text-xs text-ink-500">Remote URL:</span>
+          <Input
+            type="text"
+            value={remoteUrl || ""}
+            onChange={(e) => onRemoteUrlChange?.(e.target.value)}
+            placeholder="http://remote-server:8283"
+            size="sm"
+            className="flex-1 min-w-[200px]"
+          />
+          {!remoteUrl && (
+            <span className="text-xs text-amber-600">Enter a remote server URL</span>
           )}
-        </button>
-
-        {/* Server Mode Card (Letta Cloud) */}
-        <button
-          onClick={() => handleSwitch("server")}
-          className={`flex flex-col items-start p-3 rounded-xl border text-left transition-all ${
-            mode === "server"
-              ? "border-accent bg-accent/5"
-              : "border-ink-900/10 hover:border-ink-900/20"
-          }`}
-        >
-          <div className="flex items-center gap-2 mb-2">
-            <div className={`p-1.5 rounded-lg ${mode === "server" ? "bg-accent/10" : "bg-ink-100"}`}>
-              <Cloud className={`w-4 h-4 ${mode === "server" ? "text-accent" : "text-ink-600"}`} />
-            </div>
-            <span className="text-sm font-medium text-ink-900">Letta Cloud</span>
-            {mode === "server" && (
-              <div className="w-2 h-2 rounded-full bg-green-500" />
-            )}
-          </div>
-          <p className="text-xs text-ink-500">
-            Connect to the managed Letta Cloud service
-          </p>
-        </button>
-
-        {/* Teleport Mode Card (Teaser - Coming Soon) */}
-        <div className="flex flex-col items-start p-3 rounded-xl border border-dashed border-ink-900/20 opacity-60 cursor-not-allowed">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="p-1.5 rounded-lg bg-ink-100">
-              <Zap className="w-4 h-4 text-ink-500" />
-            </div>
-            <span className="text-sm font-medium text-ink-700">Teleport</span>
-            <span className="px-1.5 py-0.5 text-[10px] font-medium bg-ink-100 text-ink-500 rounded-full">
-              Soon
-            </span>
-          </div>
-          <p className="text-xs text-ink-500">
-            Remote control agents across devices via LACE
-          </p>
-        </div>
-      </div>
-
-      {/* Direct URL Input (shown when Direct mode selected) */}
-      {(mode === "local" || mode === "remote") && (
-        <div className="flex items-center gap-3 p-3 rounded-lg bg-surface-secondary border border-ink-900/5">
-          <div className="flex items-center gap-2 flex-1">
-            <Globe className="w-4 h-4 text-ink-400" />
-            <div className="flex-1">
-              <label className="text-xs font-medium text-ink-600 block mb-1">
-                Server URL
-              </label>
-              <div className="flex items-center gap-2">
-                <Input
-                  type="text"
-                  value={remoteUrl || "http://localhost:8283"}
-                  onChange={(e) => handleDirectUrlChange(e.target.value)}
-                  placeholder="http://localhost:8283"
-                  size="sm"
-                  className="flex-1"
-                />
-                {(!remoteUrl || remoteUrl.includes("localhost")) ? (
-                  <span className="text-xs text-ink-400 whitespace-nowrap">Local mode</span>
-                ) : (
-                  <span className="text-xs text-accent whitespace-nowrap">Custom URL</span>
-                )}
-              </div>
-            </div>
-          </div>
-          {mode === "local" && (
-            <div className="flex items-center gap-2 text-xs text-ink-500">
-              <div className={`w-2 h-2 rounded-full ${statusDotClass}`} />
-              {spawnState === "running"
-                ? "Connected"
-                : spawnState === "starting"
-                ? "Connecting..."
-                : "Disconnected"}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Error display */}
-      {(status.error || spawnError) && (
-        <div className="p-3 rounded-lg bg-red-50 border border-red-200">
-          <p className="text-xs text-red-600 font-medium mb-1">Connection Error</p>
-          <p className="text-xs text-red-600 font-mono break-words">
-            {spawnError || status.error}
-          </p>
         </div>
       )}
     </div>
