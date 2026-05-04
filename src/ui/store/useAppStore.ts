@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { Letta } from '@letta-ai/letta-client';
-import { getLettaClient } from '../services/api';
+import { getServerClient, getLettaClient } from '../services/api';
 import type { Conversation as ApiConversation } from '../services/api';
 import type { ServerEvent, SessionStatus, StreamMessage } from "../types";
 
@@ -394,7 +394,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   loadAgentList: async () => {
     set({ agentsLoading: true, agentsError: null });
     try {
-      const client = getLettaClient();
+      const client = getServerClient();
       const list: Letta.AgentState[] = [];
       for await (const agent of client.agents.list()) {
         list.push(agent);
@@ -446,7 +446,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   loadAgent: async (id) => {
     try {
-      const client = getLettaClient();
+      const client = getServerClient();
       // Fetch agent detail, blocks, and conversations in parallel.
       // Note: SDK agents.retrieve() does NOT include blocks — fetch separately.
       const [detail, blocks, conversations] = await Promise.all([
@@ -552,7 +552,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   deleteAgent: async (id) => {
     try {
-      await getLettaClient().agents.delete(id);
+      await getServerClient().agents.delete(id);
       set((state) => {
         const nextAgents = { ...state.agents };
         delete nextAgents[id];

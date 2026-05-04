@@ -50,6 +50,26 @@ export function getRemoteUrl(): string {
   return localStorage.getItem('letta_remote_url') || '';
 }
 
+/**
+ * Get the configured server URL - ALWAYS returns the actual Letta server address.
+ * This ignores connection mode and is used for loading agents, providers, etc.
+ * Agents always live on the server, regardless of which mode you chat with them.
+ */
+export function getServerUrl(): string {
+  if (typeof window !== 'undefined') {
+    const saved = localStorage.getItem('letta_api_url');
+    if (saved) return saved;
+  }
+  return import.meta.env.VITE_API_URL || 'http://localhost:8283';
+}
+
+/**
+ * Get the API base URL for the current connection mode.
+ * This is used for agent chat routing - where messages get sent.
+ * Server mode: configured server URL
+ * Local mode: localhost (for letta-code CLI)
+ * Remote mode: user-provided URL
+ */
 export function getApiBase(): string {
   const mode = getConnectionMode();
 
@@ -62,21 +82,11 @@ export function getApiBase(): string {
   if (mode === 'remote') {
     const remoteUrl = getRemoteUrl();
     if (remoteUrl) return remoteUrl;
-    // Fallback if no remote URL set
     return 'http://localhost:8283';
   }
 
-  // Server mode: configured server URL
-  if (typeof window !== 'undefined') {
-    const saved = localStorage.getItem('letta_api_url');
-    if (saved) return saved;
-    // In browser dev mode with no saved URL, use Vite dev server (proxy)
-    const isBrowserDev = !window.electron;
-    if (isBrowserDev) {
-      return window.location.origin; // e.g., http://localhost:5173
-    }
-  }
-  return import.meta.env.VITE_API_URL || 'http://localhost:8283';
+  // Server mode: configured server URL (same as getServerUrl)
+  return getServerUrl();
 }
 
 export function getApiKey(): string {
@@ -123,8 +133,32 @@ export function getLettaClient(): Letta {
   return clientInstance;
 }
 
+let serverClientInstance: Letta | null = null;
+
+/**
+ * Get a Letta client that ALWAYS talks to the server.
+ * This ignores connection mode and is used for loading agents, providers, etc.
+ */
+export function getServerClient(): Letta {
+  if (!serverClientInstance) {
+    const baseURL = getServerUrl();
+    const apiKey = getApiKey();
+
+    serverClientInstance = new Letta({
+      baseURL,
+      apiKey: apiKey || undefined,
+    });
+  }
+  return serverClientInstance;
+}
+
+export function resetServerClient(): void {
+  serverClientInstance = null;
+}
+
 export function resetClient(): void {
   clientInstance = null;
+  serverClientInstance = null;
 }
 
 // Re-export types from the Letta namespace
@@ -166,6 +200,18 @@ export interface EmbeddingModelOption {
   name: string;
   provider: string;
   dimensions?: number;
+}
+
+export interface Model {
+  handle: string;
+  name: string;
+  display_name: string;
+  provider_type: string;
+  provider_name: string;
+  max_context_window: number;
+  model?: string;
+  context_window?: number;
+  model_endpoint_type?: string;
 }
 
 /** List all LLM models from the connected server, normalized for UI consumption. */
@@ -212,6 +258,48 @@ export async function listEmbeddingModels(): Promise<EmbeddingModelOption[]> {
       dimensions: raw.embedding_dim,
     };
   });
+}
+
+/** Fetch models for a specific provider by name. */
+export async function fetchModelsForProvider(providerName: string): Promise<Model[]> {
+  const baseURL = getApiBase();
+  const apiKey = getApiKey();
+  const headers: Record<string, string> = {};
+  if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+  const response = await fetch(
+    `${baseURL.replace(/\/$/, '')}/v1/models?provider_name=${encodeURIComponent(providerName)}`,
+    { headers }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch models: ${response.status}`);
+  }
+
+  return await response.json() as Model[];
+}
+
+/** Fetch all models with optional filtering. */
+export async function fetchAllModels(providerType?: string, providerCategory?: 'base' | 'byok'): Promise<Model[]> {
+  const baseURL = getApiBase();
+  const apiKey = getApiKey();
+  const headers: Record<string, string> = {};
+  if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+  const params = new URLSearchParams();
+  if (providerType) params.append('provider_type', providerType);
+  if (providerCategory) params.append('provider_category', providerCategory);
+
+  const response = await fetch(
+    `${baseURL.replace(/\/$/, '')}/v1/models?${params.toString()}`,
+    { headers }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch models: ${response.status}`);
+  }
+
+  return await response.json() as Model[];
 }
 
 // =============================================================================
@@ -497,12 +585,16 @@ export interface CreateProviderPayload {
   provider_type: ProviderType;
   api_key: string;
   base_url?: string;
+  access_key?: string;
+  region?: string;
 }
 
 export interface UpdateProviderPayload {
-  name: string;
+  name?: string;
   api_key?: string;
   base_url?: string;
+  access_key?: string;
+  region?: string;
 }
 
 /**
@@ -538,125 +630,6 @@ export const providersApi = {
   },
 
   /**
-   * Create a new BYOK provider.
-   * POST /v1/providers/
-   */
-  createProvider: async (payload: CreateProviderPayload): Promise<Provider> => {
-    const baseURL = getApiBase();
-    const apiKey = getApiKey();
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
-
-    try {
-      const response = await fetch(`${baseURL.replace(/\/$/, '')}/v1/providers/`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          name: payload.name.trim(),
-          provider_type: payload.provider_type,
-          api_key: payload.api_key,
-          ...(payload.base_url && { base_url: payload.base_url }),
-        }),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(errorText || `Server returned ${response.status}`);
-      }
-
-      return await response.json() as Provider;
-    } catch (err) {
-      console.error('[providersApi] Failed to create provider:', err);
-      throw err;
-    }
-  },
-
-  /**
-   * Get a single provider by ID.
-   * Used internally by updateProviderFull for FULL PATCH pattern.
-   * GET /v1/providers/{provider_id}
-   */
-  getProvider: async (providerId: string): Promise<Provider> => {
-    const baseURL = getApiBase();
-    const apiKey = getApiKey();
-    const headers: Record<string, string> = {};
-    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
-
-    try {
-      const response = await fetch(`${baseURL.replace(/\/$/, '')}/v1/providers/${providerId}`, {
-        method: 'GET',
-        headers,
-      });
-
-      if (!response.ok) {
-        throw new Error(`Server returned ${response.status}`);
-      }
-
-      return await response.json() as Provider;
-    } catch (err) {
-      console.error(`[providersApi] Failed to get provider ${providerId}:`, err);
-      throw err;
-    }
-  },
-
-  /**
-   * Update a provider using FULL PATCH pattern.
-   *
-   * The Letta server requires complete provider objects on PATCH. This method:
-   * 1. Fetches the existing provider
-   * 2. Merges with the payload (api_key only included if provided)
-   * 3. Sends the complete merged object
-   *
-   * PATCH /v1/providers/{provider_id}
-   */
-  updateProviderFull: async (
-    providerId: string,
-    payload: UpdateProviderPayload
-  ): Promise<Provider> => {
-    const baseURL = getApiBase();
-    const apiKey = getApiKey();
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
-
-    try {
-      // Step 1: Fetch existing provider to get all current fields
-      const existing = await providersApi.getProvider(providerId);
-
-      // Step 2: Build complete merged object
-      const mergedBody: Record<string, unknown> = {
-        name: payload.name.trim(),
-        provider_type: existing.provider_type,
-        api_key: payload.api_key?.trim() || existing.api_key,
-      };
-
-      if (payload.base_url !== undefined) {
-        mergedBody.base_url = payload.base_url.trim() || existing.base_url;
-      }
-
-      // Step 3: Send complete object
-      const response = await fetch(`${baseURL.replace(/\/$/, '')}/v1/providers/${providerId}`, {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify(mergedBody),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(errorText || `Server returned ${response.status}`);
-      }
-
-      return await response.json() as Provider;
-    } catch (err) {
-      console.error(`[providersApi] Failed to update provider ${providerId}:`, err);
-      throw err;
-    }
-  },
-
-  /**
    * Refresh a BYOK provider to fetch the latest models from its API.
    * Calls PATCH /v1/providers/{provider_id}/refresh
    */
@@ -684,6 +657,66 @@ export const providersApi = {
   },
 
   /**
+   * Create a new BYOK provider.
+   * Calls POST /v1/providers/
+   */
+  createProvider: async (payload: CreateProviderPayload): Promise<Provider> => {
+    const baseURL = getApiBase();
+    const apiKey = getApiKey();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+    try {
+      const response = await fetch(`${baseURL.replace(/\/$/, '')}/v1/providers/`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server returned ${response.status}`);
+      }
+
+      return await response.json() as Provider;
+    } catch (err) {
+      console.error('[providersApi] Failed to create provider:', err);
+      throw err;
+    }
+  },
+
+  /**
+   * Update an existing BYOK provider.
+   * Calls PATCH /v1/providers/{provider_id}
+   */
+  updateProvider: async (providerId: string, payload: UpdateProviderPayload): Promise<Provider> => {
+    const baseURL = getApiBase();
+    const apiKey = getApiKey();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+    try {
+      const response = await fetch(`${baseURL.replace(/\/$/, '')}/v1/providers/${providerId}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server returned ${response.status}`);
+      }
+
+      return await response.json() as Provider;
+    } catch (err) {
+      console.error(`[providersApi] Failed to update provider ${providerId}:`, err);
+      throw err;
+    }
+  },
+
+  /**
    * Delete/remove a provider configuration.
    * Calls DELETE /v1/providers/{provider_id}
    */
@@ -704,6 +737,41 @@ export const providersApi = {
       }
     } catch (err) {
       console.error(`[providersApi] Failed to delete provider ${providerId}:`, err);
+      throw err;
+    }
+  },
+
+  /**
+   * Check/validate a provider's API key before creating/updating.
+   * Calls POST /v1/providers/check
+   */
+  checkProvider: async (providerType: ProviderType, apiKey: string, baseUrl?: string, accessKey?: string, region?: string): Promise<void> => {
+    const baseURL = getApiBase();
+    const apiKeyHeader = getApiKey();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (apiKeyHeader) headers['Authorization'] = `Bearer ${apiKeyHeader}`;
+
+    try {
+      const response = await fetch(`${baseURL.replace(/\/$/, '')}/v1/providers/check`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          provider_type: providerType,
+          api_key: apiKey,
+          ...(baseUrl && { base_url: baseUrl }),
+          ...(accessKey && { access_key: accessKey }),
+          ...(region && { region }),
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: `Server returned ${response.status}` }));
+        throw new Error(errorData.message || `Server returned ${response.status}`);
+      }
+    } catch (err) {
+      console.error('[providersApi] Provider check failed:', err);
       throw err;
     }
   },

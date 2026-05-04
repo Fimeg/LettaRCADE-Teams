@@ -13,20 +13,20 @@ import { useAppStore } from '../store/useAppStore';
 import {
   resetClient,
   systemApi,
-  listLLMModels,
-  listEmbeddingModels,
   providersApi,
   getApiBase,
   getApiKey,
   getConnectionMode,
   setConnectionMode,
   getRemoteUrl,
+  fetchModelsForProvider,
   type ExternalMemfsStatus,
   type Provider,
   type ProviderType,
   type ConnectionMode,
   type CreateProviderPayload,
   type UpdateProviderPayload,
+  type Model,
 } from '../services/api';
 import { FormField } from './ui/composites/FormField';
 import { Input, inputVariants } from './ui/primitives/Input';
@@ -59,6 +59,11 @@ import {
   Shield,
   ArrowRightLeft,
   Zap,
+  Star,
+  ChevronDown,
+  ChevronUp,
+  Search,
+  Sparkles,
 } from 'lucide-react';
 
 // =============================================================================
@@ -90,15 +95,9 @@ const SECTIONS: SectionConfig[] = [
   },
   {
     id: 'providers',
-    label: 'Providers',
+    label: 'Providers/Models',
     icon: FlaskConical,
     description: 'Manage AI model providers and BYOK credentials',
-  },
-  {
-    id: 'models',
-    label: 'Models',
-    icon: Database,
-    description: 'Default models and model preferences',
   },
   {
     id: 'integrations',
@@ -156,8 +155,6 @@ const PROVIDER_TYPES: {
 
 const API_BASE_KEY = 'letta_api_url';
 const API_KEY_STORAGE = 'letta_api_key';
-const DEFAULT_LLM_KEY = 'letta_default_llm';
-const DEFAULT_EMBEDDING_KEY = 'letta_default_embedding';
 
 // =============================================================================
 // UTILITY COMPONENTS
@@ -301,18 +298,18 @@ function ConnectionSection() {
 
   const modeCards = [
     {
-      mode: 'direct' as const,
-      icon: ArrowRightLeft,
-      title: 'Direct',
-      description: 'Connect directly to your Letta server (default: localhost)',
-      color: 'green',
-    },
-    {
       mode: 'server' as ConnectionMode,
       icon: Server,
       title: 'Server',
       description: 'Connect to a configured external Letta server',
       color: 'blue',
+    },
+    {
+      mode: 'direct' as const,
+      icon: ArrowRightLeft,
+      title: 'Local/Remote',
+      description: 'Execute against letta-code at the destination (default: localhost)',
+      color: 'green',
     },
     {
       mode: 'teleport' as const,
@@ -587,7 +584,7 @@ function ProviderModal({
     <Modal open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <ModalContent className="max-w-lg">
         <ModalHeader>
-          <ModalTitle>{mode === 'create' ? 'Add Provider' : 'Edit Provider'}</ModalTitle>
+          <ModalTitle>{mode === 'create' ? 'Add' : 'Edit'}</ModalTitle>
           <ModalDescription>
             {mode === 'create'
               ? 'Configure a new AI model provider'
@@ -688,7 +685,7 @@ function ProviderModal({
             Cancel
           </Button>
           <Button onClick={handleSubmit} isLoading={saving}>
-            {saving ? 'Saving…' : mode === 'create' ? 'Add Provider' : 'Save Changes'}
+            {saving ? 'Saving…' : mode === 'create' ? 'Add' : 'Save Changes'}
           </Button>
         </ModalFooter>
       </ModalContent>
@@ -730,7 +727,7 @@ function DeleteProviderModal({
               <Trash2 className="w-5 h-5 text-red-600" />
             </div>
             <div>
-              <ModalTitle>Delete Provider?</ModalTitle>
+              <ModalTitle>Delete?</ModalTitle>
               <ModalDescription>This action cannot be undone.</ModalDescription>
             </div>
           </div>
@@ -747,7 +744,7 @@ function DeleteProviderModal({
             Cancel
           </Button>
           <Button variant="danger" onClick={handleConfirm} isLoading={deleting}>
-            {deleting ? 'Deleting…' : 'Delete Provider'}
+            {deleting ? 'Deleting…' : 'Delete'}
           </Button>
         </ModalFooter>
       </ModalContent>
@@ -755,12 +752,28 @@ function DeleteProviderModal({
   );
 }
 
+// Favorites storage key
+const FAVORITE_MODELS_KEY = 'letta:favorite-models';
+
 function ProvidersSection() {
   const serverConnected = useAppStore((s) => s.serverConnected);
   const [providers, setProviders] = useState<Provider[]>([]);
+  const [models, setModels] = useState<Map<string, Model[]>>(new Map());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
+  const [loadingModels, setLoadingModels] = useState<Set<string>>(new Set());
+  const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set());
+  const [searchQuery, setSearchQuery] = useState('');
+  const [favoriteModels, setFavoriteModels] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set();
+    try {
+      const saved = localStorage.getItem(FAVORITE_MODELS_KEY);
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
 
   // Modal states
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -776,11 +789,93 @@ function ProvidersSection() {
   const baseProviders = useMemo(() => providers.filter((p) => p.provider_category === 'base'), [providers]);
   const byokProviders = useMemo(() => providers.filter((p) => p.provider_category === 'byok'), [providers]);
 
+  // All models flattened for search
+  const allModels = useMemo(() => {
+    const flat: (Model & { providerId: string; providerName: string })[] = [];
+    models.forEach((providerModels, providerId) => {
+      const provider = providers.find((p) => p.id === providerId);
+      providerModels.forEach((m) => {
+        flat.push({ ...m, providerId, providerName: provider?.name || m.provider_name });
+      });
+    });
+    return flat;
+  }, [models, providers]);
+
+  // Filtered search results
+  const searchResults = useMemo(() => {
+    if (!searchQuery.trim()) return [];
+    const q = searchQuery.toLowerCase();
+    return allModels.filter(
+      (m) =>
+        m.display_name.toLowerCase().includes(q) ||
+        m.handle.toLowerCase().includes(q) ||
+        m.providerName.toLowerCase().includes(q)
+    );
+  }, [allModels, searchQuery]);
+
+  const [providersAvailable, setProvidersAvailable] = useState<boolean | null>(null);
+
+  const toggleFavorite = useCallback((modelHandle: string) => {
+    setFavoriteModels((prev) => {
+      const next = new Set(prev);
+      if (next.has(modelHandle)) {
+        next.delete(modelHandle);
+      } else {
+        next.add(modelHandle);
+      }
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(FAVORITE_MODELS_KEY, JSON.stringify([...next]));
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleExpandProvider = useCallback(
+    async (providerId: string) => {
+      setExpandedProviders((prev) => {
+        const next = new Set(prev);
+        if (next.has(providerId)) {
+          next.delete(providerId);
+        } else {
+          next.add(providerId);
+        }
+        return next;
+      });
+
+      // Load models if not already loaded
+      if (!models.has(providerId) && !loadingModels.has(providerId)) {
+        const provider = providers.find((p) => p.id === providerId);
+        if (!provider) return;
+
+        setLoadingModels((prev) => new Set(prev).add(providerId));
+        try {
+          const providerModels = await fetchModelsForProvider(provider.name);
+          setModels((prev) => new Map(prev).set(providerId, providerModels));
+        } catch (err) {
+          console.error(`[ProvidersSection] Failed to load models for ${providerId}:`, err);
+        } finally {
+          setLoadingModels((prev) => {
+            const next = new Set(prev);
+            next.delete(providerId);
+            return next;
+          });
+        }
+      }
+    },
+    [models, loadingModels, providers]
+  );
+
   const loadProviders = useCallback(async () => {
     if (!serverConnected) return;
     setLoading(true);
     setError(null);
     try {
+      const available = await providersApi.isAvailable();
+      setProvidersAvailable(available);
+      if (!available) {
+        setLoading(false);
+        return;
+      }
       const data = await providersApi.listProviders();
       setProviders(data);
     } catch (err) {
@@ -808,14 +903,17 @@ function ProvidersSection() {
     }
   };
 
-  const testProviderConnection = async (_formData: ProviderFormData) => {
+  const testProviderConnection = async (formData: ProviderFormData) => {
     setIsTesting(true);
     setTestResult(null);
     try {
-      // Simple test: try to refresh models from the provider
-      // This is a mock - in reality you'd have a dedicated test endpoint
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      setTestResult({ success: true, message: 'Connection successful! Provider responds to API calls.' });
+      // Validate the provider API key before creating
+      await providersApi.checkProvider(
+        formData.provider_type,
+        formData.api_key,
+        formData.base_url || undefined
+      );
+      setTestResult({ success: true, message: 'API key is valid!' });
     } catch (err) {
       setTestResult({
         success: false,
@@ -845,7 +943,7 @@ function ProvidersSection() {
       ...(formData.api_key.trim() && { api_key: formData.api_key }),
       base_url: formData.base_url || undefined,
     };
-    const updated = await providersApi.updateProviderFull(editingProvider.id, payload);
+    const updated = await providersApi.updateProvider(editingProvider.id, payload);
     setProviders((prev) => prev.map((p) => (p.id === editingProvider.id ? updated : p)));
   };
 
@@ -878,33 +976,280 @@ function ProvidersSection() {
     return <Globe className="w-4 h-4" />;
   };
 
+  const renderModelCard = (model: Model) => {
+    const isFavorite = favoriteModels.has(model.handle);
+    const contextWindow = model.max_context_window || model.context_window;
+
+    return (
+      <div
+        key={model.handle}
+        className="flex items-center justify-between p-3 rounded-lg bg-surface-cream/50 hover:bg-surface-cream transition-colors"
+      >
+        <div className="flex items-start gap-3 min-w-0">
+          <div className="w-8 h-8 rounded-md bg-accent/10 flex items-center justify-center text-accent shrink-0">
+            <Sparkles className="w-4 h-4" />
+          </div>
+          <div className="min-w-0">
+            <p className="font-medium text-sm text-ink-900 truncate">{model.display_name}</p>
+            <code className="text-xs text-ink-500 font-mono truncate block">{model.handle}</code>
+            {contextWindow && (
+              <p className="text-xs text-ink-500 mt-0.5">{Math.round(contextWindow / 1000)}k context</p>
+            )}
+          </div>
+        </div>
+        <button
+          onClick={() => toggleFavorite(model.handle)}
+          className={`p-1.5 rounded-md transition-colors ${
+            isFavorite ? 'text-amber-500 hover:bg-amber-50' : 'text-ink-400 hover:bg-ink-900/5'
+          }`}
+          title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+        >
+          <Star className={`w-4 h-4 ${isFavorite ? 'fill-current' : ''}`} />
+        </button>
+      </div>
+    );
+  };
+
+  const renderProviderCard = (provider: Provider, isBase: boolean) => {
+    const isRefreshing = refreshingId === provider.id;
+    const isExpanded = expandedProviders.has(provider.id);
+    const isLoadingModels = loadingModels.has(provider.id);
+    const providerModels = models.get(provider.id) || [];
+    const status = !provider.last_synced
+      ? { variant: 'warning' as const, text: 'Never synced' }
+      : { variant: 'success' as const, text: `Last synced: ${formatLastSynced(provider.last_synced)}` };
+
+    return (
+      <Card key={provider.id} className={`transition-colors ${isBase ? 'opacity-75' : 'hover:border-accent/30'}`}>
+        <CardContent className="p-4">
+          {/* Provider Header */}
+          <div className="flex items-start justify-between">
+            <div className="flex items-start gap-3">
+              <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                isBase ? 'bg-green-100 text-green-600' : 'bg-surface-tertiary text-ink-500'
+              }`}>
+                {getProviderIcon(provider.provider_type)}
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="font-medium text-ink-900">{provider.name}</h4>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${
+                    isBase ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+                  }`}>
+                    {isBase ? 'Base' : 'BYOK'}
+                  </span>
+                </div>
+                <p className="text-sm text-ink-500 capitalize">{provider.provider_type.replace(/_/g, ' ')}</p>
+                {!isBase && (
+                  <div className="flex items-center gap-2 mt-2">
+                    <StatusBadge status={status.variant === 'success' ? 'success' : 'warning'} text={status.text} />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1">
+              {/* Expand/Collapse */}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => toggleExpandProvider(provider.id)}
+                title={isExpanded ? 'Hide models' : 'Show models'}
+              >
+                {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                <span className="ml-1 text-xs">{providerModels.length > 0 ? providerModels.length : ''}</span>
+              </Button>
+
+              {!isBase && (
+                <>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => refreshProvider(provider.id)}
+                    disabled={isRefreshing}
+                    title="Refresh models from provider"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setEditingProvider(provider);
+                      setIsEditModalOpen(true);
+                    }}
+                    title="Edit provider"
+                  >
+                    <Edit2 className="w-4 h-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setDeletingProvider(provider);
+                      setIsDeleteModalOpen(true);
+                    }}
+                    title="Delete provider"
+                  >
+                    <Trash2 className="w-4 h-4 text-red-500" />
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Base URL */}
+          {provider.base_url && (
+            <div className="mt-3 pt-3 border-t border-ink-900/5">
+              <code className="text-xs font-mono text-ink-500">{provider.base_url}</code>
+            </div>
+          )}
+
+          {/* Expanded Models Section */}
+          {isExpanded && (
+            <div className="mt-4 pt-4 border-t border-ink-900/10">
+              {isLoadingModels ? (
+                <div className="flex items-center justify-center py-4">
+                  <RefreshCw className="w-4 h-4 animate-spin text-ink-400" />
+                  <span className="ml-2 text-sm text-ink-500">Loading models...</span>
+                </div>
+              ) : providerModels.length === 0 ? (
+                <p className="text-sm text-ink-500 py-2">No models loaded. Click refresh to load models.</p>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-ink-700 uppercase tracking-wide mb-2">Available Models</p>
+                  <div className="grid gap-2 max-h-64 overflow-y-auto">
+                    {providerModels.map(renderModelCard)}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    );
+  };
+
   return (
     <div className="space-y-8">
       <SectionHeader
-        title="AI Providers"
-        description="Manage model providers for agent inference"
+        title="AI Providers & Models"
+        description="Manage providers and browse available models"
       />
 
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-ink-600">
-          <strong>Base</strong> providers are hosted by Letta. <strong>BYOK</strong> (Bring Your Own Key) providers use your API credentials.
-        </p>
-        <div className="flex items-center gap-2">
-          <Button onClick={() => setIsAddModalOpen(true)} disabled={!serverConnected || loading}>
-            <Plus className="w-4 h-4 mr-1.5" />
-            Add Provider
-          </Button>
-          <Button variant="secondary" onClick={loadProviders} disabled={loading || !serverConnected} isLoading={loading}>
-            <RefreshCw className="w-4 h-4 mr-1.5" />
-            Refresh
-          </Button>
+      {/* Search Bar */}
+      <div className="flex items-center gap-3">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-400" />
+          <Input
+            type="text"
+            placeholder="Search models by name, handle, or provider..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-10"
+          />
         </div>
+        <Button onClick={() => setIsAddModalOpen(true)} disabled={!serverConnected || loading || providersAvailable === false}>
+          <Plus className="w-4 h-4 mr-1.5" />
+          Add
+        </Button>
+        <Button variant="secondary" onClick={loadProviders} disabled={loading || !serverConnected} isLoading={loading}>
+          <RefreshCw className="w-4 h-4 mr-1.5" />
+          Refresh
+        </Button>
       </div>
 
       {error && (
         <Alert variant="error" className="mb-4">
           {error}
         </Alert>
+      )}
+
+      {/* Favorites Section */}
+      {favoriteModels.size > 0 && !searchQuery && (
+        <SubSection title={`Favorites (${favoriteModels.size})`}>
+          <div className="grid gap-2">
+            {allModels
+              .filter((m) => favoriteModels.has(m.handle))
+              .map((model) => (
+                <div
+                  key={model.handle}
+                  className="flex items-center justify-between p-3 rounded-lg bg-amber-50 border border-amber-100"
+                >
+                  <div className="flex items-start gap-3 min-w-0">
+                    <Star className="w-5 h-5 text-amber-500 fill-current shrink-0 mt-0.5" />
+                    <div className="min-w-0">
+                      <p className="font-medium text-sm text-ink-900 truncate">{model.display_name}</p>
+                      <div className="flex items-center gap-2 text-xs text-ink-500">
+                        <code className="font-mono">{model.handle}</code>
+                        <span>•</span>
+                        <span>{model.providerName}</span>
+                        {model.max_context_window && (
+                          <>
+                            <span>•</span>
+                            <span>{Math.round(model.max_context_window / 1000)}k context</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => toggleFavorite(model.handle)}
+                    className="p-1.5 rounded-md text-ink-400 hover:bg-amber-100 transition-colors"
+                    title="Remove from favorites"
+                  >
+                    <XCircle className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+          </div>
+        </SubSection>
+      )}
+
+      {/* Search Results */}
+      {searchQuery && (
+        <SubSection title={`Search Results (${searchResults.length})`}>
+          {searchResults.length === 0 ? (
+            <p className="text-sm text-ink-500 py-4">No models found matching "{searchQuery}"</p>
+          ) : (
+            <div className="grid gap-2 max-h-96 overflow-y-auto">
+              {searchResults.map((model) => (
+                <div
+                  key={model.handle}
+                  className="flex items-center justify-between p-3 rounded-lg bg-surface-cream hover:bg-surface-cream/80 transition-colors"
+                >
+                  <div className="flex items-start gap-3 min-w-0">
+                    <Sparkles className="w-5 h-5 text-accent shrink-0 mt-0.5" />
+                    <div className="min-w-0">
+                      <p className="font-medium text-sm text-ink-900 truncate">{model.display_name}</p>
+                      <div className="flex items-center gap-2 text-xs text-ink-500">
+                        <code className="font-mono">{model.handle}</code>
+                        <span>•</span>
+                        <span>{model.providerName}</span>
+                        {model.max_context_window && (
+                          <>
+                            <span>•</span>
+                            <span>{Math.round(model.max_context_window / 1000)}k context</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => toggleFavorite(model.handle)}
+                    className={`p-1.5 rounded-md transition-colors ${
+                      favoriteModels.has(model.handle)
+                        ? 'text-amber-500 hover:bg-amber-50'
+                        : 'text-ink-400 hover:bg-ink-900/5'
+                    }`}
+                  >
+                    <Star className={`w-4 h-4 ${favoriteModels.has(model.handle) ? 'fill-current' : ''}`} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </SubSection>
       )}
 
       {!serverConnected ? (
@@ -919,115 +1264,25 @@ function ProvidersSection() {
           <CardContent className="p-8 text-center">
             <FlaskConical className="w-12 h-12 text-ink-300 mx-auto mb-4" />
             <p className="text-ink-500 mb-2">No providers configured yet.</p>
-            <p className="text-sm text-ink-400">Click "Add Provider" to connect your first BYOK provider.</p>
+            <p className="text-sm text-ink-400">Click "Add" to connect your first BYOK provider.</p>
           </CardContent>
         </Card>
       ) : (
         <div className="space-y-6">
           {/* BYOK Providers */}
-          {byokProviders.length > 0 && (
+          {byokProviders.length > 0 && !searchQuery && (
             <SubSection title={`BYOK Providers (${byokProviders.length})`}>
               <div className="grid gap-3">
-                {byokProviders.map((provider) => {
-                  const isRefreshing = refreshingId === provider.id;
-                  const status = !provider.last_synced
-                    ? { variant: 'warning' as const, text: 'Never synced' }
-                    : { variant: 'success' as const, text: `Last synced: ${formatLastSynced(provider.last_synced)}` };
-
-                  return (
-                    <Card key={provider.id} className="hover:border-accent/30 transition-colors">
-                      <CardContent className="p-4">
-                        <div className="flex items-start justify-between">
-                          <div className="flex items-start gap-3">
-                            <div className="w-10 h-10 rounded-lg bg-surface-tertiary flex items-center justify-center text-ink-500">
-                              {getProviderIcon(provider.provider_type)}
-                            </div>
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <h4 className="font-medium text-ink-900">{provider.name}</h4>
-                                <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-medium">
-                                  BYOK
-                                </span>
-                              </div>
-                              <p className="text-sm text-ink-500 capitalize">{provider.provider_type.replace(/_/g, ' ')}</p>
-                              <div className="flex items-center gap-2 mt-2">
-                                <StatusBadge status={status.variant === 'success' ? 'success' : 'warning'} text={status.text} />
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-1">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => refreshProvider(provider.id)}
-                              disabled={isRefreshing}
-                              title="Refresh models from provider"
-                            >
-                              <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => {
-                                setEditingProvider(provider);
-                                setIsEditModalOpen(true);
-                              }}
-                              title="Edit provider"
-                            >
-                              <Edit2 className="w-4 h-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => {
-                                setDeletingProvider(provider);
-                                setIsDeleteModalOpen(true);
-                              }}
-                              title="Delete provider"
-                            >
-                              <Trash2 className="w-4 h-4 text-red-500" />
-                            </Button>
-                          </div>
-                        </div>
-
-                        {provider.base_url && (
-                          <div className="mt-3 pt-3 border-t border-ink-900/5">
-                            <code className="text-xs font-mono text-ink-500">{provider.base_url}</code>
-                          </div>
-                        )}
-                      </CardContent>
-                    </Card>
-                  );
-                })}
+                {byokProviders.map((p) => renderProviderCard(p, false))}
               </div>
             </SubSection>
           )}
 
           {/* Base Providers */}
-          {baseProviders.length > 0 && (
+          {baseProviders.length > 0 && !searchQuery && (
             <SubSection title={`Base Providers (${baseProviders.length})`}>
               <div className="grid gap-3">
-                {baseProviders.map((provider) => (
-                  <Card key={provider.id} className="opacity-75">
-                    <CardContent className="p-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center text-green-600">
-                          {getProviderIcon(provider.provider_type)}
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h4 className="font-medium text-ink-900">{provider.name}</h4>
-                            <span className="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-[10px] font-medium">
-                              Base
-                            </span>
-                          </div>
-                          <p className="text-sm text-ink-500 capitalize">{provider.provider_type.replace(/_/g, ' ')}</p>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
+                {baseProviders.map((p) => renderProviderCard(p, true))}
               </div>
             </SubSection>
           )}
@@ -1075,112 +1330,6 @@ function ProvidersSection() {
 // MODELS SECTION
 // =============================================================================
 
-function ModelsSection() {
-  const serverConnected = useAppStore((s) => s.serverConnected);
-  const [llmModels, setLlmModels] = useState<Awaited<ReturnType<typeof listLLMModels>>>([]);
-  const [embeddingModels, setEmbeddingModels] = useState<Awaited<ReturnType<typeof listEmbeddingModels>>>([]);
-  const [loading, setLoading] = useState(false);
-  const [defaultLlm, setDefaultLlm] = useState(() => localStorage.getItem(DEFAULT_LLM_KEY) ?? '');
-  const [defaultEmbedding, setDefaultEmbedding] = useState(() => localStorage.getItem(DEFAULT_EMBEDDING_KEY) ?? '');
-
-  const loadModels = useCallback(async () => {
-    if (!serverConnected) return;
-    setLoading(true);
-    try {
-      const [llms, embeddings] = await Promise.all([listLLMModels(), listEmbeddingModels()]);
-      setLlmModels(llms);
-      setEmbeddingModels(embeddings);
-    } catch (err) {
-      console.error('[ModelsSection] Failed to load models:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, [serverConnected]);
-
-  useEffect(() => {
-    loadModels();
-  }, [loadModels]);
-
-  const handleSelectDefaultLlm = (id: string) => {
-    setDefaultLlm(id);
-    if (id) localStorage.setItem(DEFAULT_LLM_KEY, id);
-    else localStorage.removeItem(DEFAULT_LLM_KEY);
-  };
-
-  const handleSelectDefaultEmbedding = (id: string) => {
-    setDefaultEmbedding(id);
-    if (id) localStorage.setItem(DEFAULT_EMBEDDING_KEY, id);
-    else localStorage.removeItem(DEFAULT_EMBEDDING_KEY);
-  };
-
-  return (
-    <div className="space-y-8">
-      <SectionHeader title="Default Models" description="Set default models for new agents" />
-
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-ink-600">Defaults apply to newly created agents.</p>
-        <Button variant="secondary" onClick={loadModels} disabled={loading || !serverConnected} isLoading={loading} size="sm">
-          {loading ? 'Refreshing…' : 'Refresh'}
-        </Button>
-      </div>
-
-      {!serverConnected ? (
-        <Card>
-          <CardContent className="p-8 text-center">
-            <Database className="w-12 h-12 text-ink-300 mx-auto mb-4" />
-            <p className="text-ink-500">Connect to a server to list available models.</p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-6">
-          <SubSection title="Default LLM">
-            <Card>
-              <CardContent className="p-4 space-y-4">
-                <FormField label="Default LLM" helperText={`${llmModels.length} model${llmModels.length === 1 ? '' : 's'} available`}>
-                  <select
-                    value={defaultLlm}
-                    onChange={(e) => handleSelectDefaultLlm(e.target.value)}
-                    className={inputVariants({ size: 'sm' })}
-                  >
-                    <option value="">— No default (let server pick) —</option>
-                    {llmModels.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name} · {m.provider}
-                        {m.contextWindow ? ` · ${(m.contextWindow / 1000).toFixed(0)}k ctx` : ''}
-                      </option>
-                    ))}
-                  </select>
-                </FormField>
-              </CardContent>
-            </Card>
-          </SubSection>
-
-          <SubSection title="Default Embedding Model">
-            <Card>
-              <CardContent className="p-4 space-y-4">
-                <FormField label="Default Embedding Model" helperText={`Required for archival memory. ${embeddingModels.length} available.`}>
-                  <select
-                    value={defaultEmbedding}
-                    onChange={(e) => handleSelectDefaultEmbedding(e.target.value)}
-                    className={inputVariants({ size: 'sm' })}
-                  >
-                    <option value="">— No default —</option>
-                    {embeddingModels.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name} · {m.provider}
-                        {m.dimensions ? ` · ${m.dimensions}d` : ''}
-                      </option>
-                    ))}
-                  </select>
-                </FormField>
-              </CardContent>
-            </Card>
-          </SubSection>
-        </div>
-      )}
-    </div>
-  );
-}
 
 // =============================================================================
 // INTEGRATIONS SECTION
@@ -1573,8 +1722,6 @@ export function SettingsPanel() {
         return <ConnectionSection />;
       case 'providers':
         return <ProvidersSection />;
-      case 'models':
-        return <ModelsSection />;
       case 'integrations':
         return <IntegrationsSection />;
       case 'preferences':
