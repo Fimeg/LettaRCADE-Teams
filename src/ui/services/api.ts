@@ -492,6 +492,19 @@ export interface Provider {
   access_key_enc?: string;
 }
 
+export interface CreateProviderPayload {
+  name: string;
+  provider_type: ProviderType;
+  api_key: string;
+  base_url?: string;
+}
+
+export interface UpdateProviderPayload {
+  name: string;
+  api_key?: string;
+  base_url?: string;
+}
+
 /**
  * Provider API client using raw fetch (not wrapped in SDK yet).
  * The /v1/providers/ endpoints exist on OSS 16.7+ but aren't in the official SDK.
@@ -520,6 +533,125 @@ export const providersApi = {
       return await response.json() as Provider[];
     } catch (err) {
       console.error('[providersApi] Failed to list providers:', err);
+      throw err;
+    }
+  },
+
+  /**
+   * Create a new BYOK provider.
+   * POST /v1/providers/
+   */
+  createProvider: async (payload: CreateProviderPayload): Promise<Provider> => {
+    const baseURL = getApiBase();
+    const apiKey = getApiKey();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+    try {
+      const response = await fetch(`${baseURL.replace(/\/$/, '')}/v1/providers/`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          name: payload.name.trim(),
+          provider_type: payload.provider_type,
+          api_key: payload.api_key,
+          ...(payload.base_url && { base_url: payload.base_url }),
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || `Server returned ${response.status}`);
+      }
+
+      return await response.json() as Provider;
+    } catch (err) {
+      console.error('[providersApi] Failed to create provider:', err);
+      throw err;
+    }
+  },
+
+  /**
+   * Get a single provider by ID.
+   * Used internally by updateProviderFull for FULL PATCH pattern.
+   * GET /v1/providers/{provider_id}
+   */
+  getProvider: async (providerId: string): Promise<Provider> => {
+    const baseURL = getApiBase();
+    const apiKey = getApiKey();
+    const headers: Record<string, string> = {};
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+    try {
+      const response = await fetch(`${baseURL.replace(/\/$/, '')}/v1/providers/${providerId}`, {
+        method: 'GET',
+        headers,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server returned ${response.status}`);
+      }
+
+      return await response.json() as Provider;
+    } catch (err) {
+      console.error(`[providersApi] Failed to get provider ${providerId}:`, err);
+      throw err;
+    }
+  },
+
+  /**
+   * Update a provider using FULL PATCH pattern.
+   *
+   * The Letta server requires complete provider objects on PATCH. This method:
+   * 1. Fetches the existing provider
+   * 2. Merges with the payload (api_key only included if provided)
+   * 3. Sends the complete merged object
+   *
+   * PATCH /v1/providers/{provider_id}
+   */
+  updateProviderFull: async (
+    providerId: string,
+    payload: UpdateProviderPayload
+  ): Promise<Provider> => {
+    const baseURL = getApiBase();
+    const apiKey = getApiKey();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+    try {
+      // Step 1: Fetch existing provider to get all current fields
+      const existing = await providersApi.getProvider(providerId);
+
+      // Step 2: Build complete merged object
+      const mergedBody: Record<string, unknown> = {
+        name: payload.name.trim(),
+        provider_type: existing.provider_type,
+        api_key: payload.api_key?.trim() || existing.api_key,
+      };
+
+      if (payload.base_url !== undefined) {
+        mergedBody.base_url = payload.base_url.trim() || existing.base_url;
+      }
+
+      // Step 3: Send complete object
+      const response = await fetch(`${baseURL.replace(/\/$/, '')}/v1/providers/${providerId}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify(mergedBody),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || `Server returned ${response.status}`);
+      }
+
+      return await response.json() as Provider;
+    } catch (err) {
+      console.error(`[providersApi] Failed to update provider ${providerId}:`, err);
       throw err;
     }
   },

@@ -109,30 +109,82 @@ function killViteDevServer(): void {
     }
 }
 
-function cleanup(): void {
+async function cleanup(): Promise<void> {
     if (cleanupComplete) return;
     cleanupComplete = true;
 
-    // Save window size to config
-    if (mainWindow && appConfig) {
-        const bounds = mainWindow.getBounds();
-        appConfig.windowWidth = bounds.width;
-        appConfig.windowHeight = bounds.height;
-        saveConfig(appConfig);
+    console.log("[cleanup] Starting graceful shutdown sequence...");
+
+    // 1. Notify renderer so it can show a shutdown indicator
+    try {
+        mainWindow?.webContents.send("app:shutting-down");
+    } catch {
+        // Window may already be destroyed
     }
 
+    // 2. Save window size to config
+    if (mainWindow && appConfig) {
+        try {
+            const bounds = mainWindow.getBounds();
+            appConfig.windowWidth = bounds.width;
+            appConfig.windowHeight = bounds.height;
+            saveConfig(appConfig);
+        } catch (err) {
+            console.error("[cleanup] Failed to save window config:", err);
+        }
+    }
+
+    // 3. Synchronous teardown: shortcuts, polling (no IO)
     globalShortcut.unregisterAll();
     stopPolling();
-    ipcHandlers.cleanupAllSessions();
-    // Fire-and-forget; Electron is tearing down anyway
-    lettaCode.stop().catch(() => {});
-    teamsRuntime.stop().catch(() => {});
-    closeDatabase();
+
+    // 4. Close active SDK sessions (before killing subprocesses)
+    try {
+        ipcHandlers.cleanupAllSessions();
+        console.log("[cleanup] Sessions closed");
+    } catch (err) {
+        console.error("[cleanup] Failed to close sessions:", err);
+    }
+
+    // 5. Stop letta-code subprocess with 3s timeout
+    try {
+        await Promise.race([
+            lettaCode.stop(),
+            new Promise<void>((_, reject) =>
+                setTimeout(() => reject(new Error("[cleanup] lettaCode.stop() timed out")), 3000)
+            ),
+        ]);
+        console.log("[cleanup] LettaCode stopped");
+    } catch (err) {
+        console.error("[cleanup] LettaCode stop failed:", err);
+    }
+
+    // 6. Stop teams runtime
+    try {
+        teamsRuntime.stop();
+        console.log("[cleanup] Teams runtime stopped");
+    } catch (err) {
+        console.error("[cleanup] Teams runtime stop failed:", err);
+    }
+
+    // 7. Close database (no more IO after this point)
+    try {
+        closeDatabase();
+        console.log("[cleanup] Database closed");
+    } catch (err) {
+        console.error("[cleanup] Database close failed:", err);
+    }
+
+    // 8. Kill Vite dev server (only in dev mode)
     killViteDevServer();
+
+    console.log("[cleanup] Graceful shutdown sequence complete");
 }
 
 function handleSignal(): void {
-    cleanup();
+    if (!cleanupComplete) {
+        console.log("[main] Received termination signal, initiating cleanup...");
+    }
     app.quit();
 }
 
@@ -157,11 +209,15 @@ app.on("ready", () => {
 
     Menu.setApplicationMenu(null);
     // Setup event handlers
-    app.on("before-quit", cleanup);
-    app.on("will-quit", cleanup);
-    app.on("window-all-closed", () => {
-        cleanup();
+    app.on("will-quit", async (event) => {
+        if (cleanupComplete) return;
+        event.preventDefault();
+        console.log("[main] will-quit: running async cleanup...");
+        await cleanup();
         app.quit();
+    });
+    app.on("window-all-closed", () => {
+        if (process.platform !== "darwin") app.quit();
     });
 
     process.on("SIGTERM", handleSignal);

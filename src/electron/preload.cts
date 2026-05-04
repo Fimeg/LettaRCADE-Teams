@@ -7,6 +7,11 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcOn("statistics", (stats: { cpuUsage: number; ramUsage: number; storageData: number }) => {
             callback(stats);
         }),
+    onShuttingDown: (callback: () => void) => {
+        const cb = () => callback();
+        electron.ipcRenderer.on("app:shutting-down", cb);
+        return () => electron.ipcRenderer.off("app:shutting-down", cb);
+    },
     getStaticData: () => ipcInvoke("getStaticData"),
     
     // Letta Agent IPC APIs

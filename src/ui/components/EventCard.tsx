@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import type {
   CanUseToolResponse,
   SDKMessage,
@@ -55,6 +55,36 @@ export function isMarkdown(text: string): boolean {
   return patterns.some((pattern) => pattern.test(text));
 }
 
+/** Lightweight JSON syntax highlighting — wraps keys/values in colored spans. */
+function formatJsonWithHighlight(json: string): React.ReactNode {
+  try {
+    const parsed = JSON.parse(json);
+    const formatted = JSON.stringify(parsed, null, 2);
+    const parts = formatted.split(/(\s+|"(?:[^"\\]|\\.)*"\s*:\s*"(?:[^"\\]|\\.)*"|"(?:[^"\\]|\\.)*"\s*:\s*[^,\n]+)/g);
+    return parts.map((part, i) => {
+      const keyMatch = part.match(/^(\s*)"((?:[^"\\]|\\.)*)"\s*:\s*/);
+      if (keyMatch) {
+        const afterColon = part.slice(keyMatch[0].length);
+        return <span key={i}>{keyMatch[1]}<span className="text-purple-600">"{keyMatch[2]}"</span>: <span className="text-ink-900">{afterColon}</span></span>;
+      }
+      const strMatch = part.match(/^(\s*)"((?:[^"\\]|\\.)*)"$/);
+      if (strMatch) {
+        return <span key={i}>{strMatch[1]}<span className="text-green-600">"{strMatch[2]}"</span></span>;
+      }
+      const numMatch = part.match(/^(\s*)(-?\d+\.?\d*)(.*)/);
+      if (numMatch) {
+        return <span key={i}>{numMatch[1]}<span className="text-amber-600">{numMatch[2]}</span>{numMatch[3]}</span>;
+      }
+      if (part.includes('true') || part.includes('false') || part.includes('null')) {
+        return <span key={i} className="text-blue-600">{part}</span>;
+      }
+      return <span key={i}>{part}</span>;
+    });
+  } catch {
+    return json;
+  }
+}
+
 function extractTagContent(input: string, tag: string): string | null {
   const match = input.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`));
   return match ? match[1] : null;
@@ -81,6 +111,13 @@ const ToolResultCard = ({ message }: { message: SDKToolResultMessage }) => {
   const hasMoreLines = lines.length > MAX_VISIBLE_LINES;
   const visibleContent = hasMoreLines && !isExpanded ? lines.slice(0, MAX_VISIBLE_LINES).join("\n") : lines.join("\n");
 
+  // Detect if content looks like JSON for syntax formatting
+  const looksLikeJson = (() => {
+    const trimmed = contentText.trim();
+    return (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+           (trimmed.startsWith('[') && trimmed.endsWith(']'));
+  })();
+
   useEffect(() => {
     if (message.toolCallId) {
       setToolStatus(message.toolCallId, isError ? "error" : "success");
@@ -93,11 +130,23 @@ const ToolResultCard = ({ message }: { message: SDKToolResultMessage }) => {
 
   return (
     <div className="flex flex-col mt-4">
-      <div className="header text-accent">Output</div>
-      <div className="mt-2 rounded-xl bg-surface-tertiary p-3">
-        <pre className={`text-sm whitespace-pre-wrap break-words font-mono ${isError ? "text-red-500" : "text-ink-700"}`}>
-          {isMarkdownContent ? <MDContent text={visibleContent} /> : visibleContent}
-        </pre>
+      <div className="header flex items-center gap-2 text-accent">
+        <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+        </svg>
+        Output
+      </div>
+      <div className={`mt-2 rounded-xl p-3 ${isError ? 'bg-error-light' : 'bg-surface-tertiary'}`}>
+        {looksLikeJson ? (
+          <pre className={`text-sm whitespace-pre-wrap break-words font-mono ${isError ? "text-red-500" : ""}`}>
+            {formatJsonWithHighlight(visibleContent)}
+          </pre>
+        ) : (
+          <pre className={`text-sm whitespace-pre-wrap break-words font-mono ${isError ? "text-red-500" : "text-ink-700"}`}>
+            {isMarkdownContent ? <MDContent text={visibleContent} /> : visibleContent}
+          </pre>
+        )}
         {hasMoreLines && (
           <button onClick={() => setIsExpanded(!isExpanded)} className="mt-2 text-sm text-accent hover:text-accent-hover transition-colors flex items-center gap-1">
             <span>{isExpanded ? "▲" : "▼"}</span>
@@ -206,15 +255,35 @@ const ToolCallCard = ({
     );
   }
 
+  const [toolDetailOpen, setToolDetailOpen] = useState(false);
+
   return (
-    <div className="flex flex-col gap-2 rounded-[1rem] bg-surface-tertiary px-3 py-2 mt-4 overflow-hidden">
-      <div className="flex flex-row items-center gap-2 min-w-0">
+    <div className="flex flex-col rounded-[1rem] bg-surface-tertiary mt-4 overflow-hidden">
+      <div
+        className="flex flex-row items-center gap-2 px-3 py-2 cursor-pointer hover:bg-black/5 transition-colors min-w-0"
+        onClick={() => { if (getToolInfo()) setToolDetailOpen(!toolDetailOpen); }}
+      >
         <StatusDot variant={statusVariant} isActive={isPending && showIndicator} isVisible={shouldShowDot} />
         <div className="flex flex-row items-center gap-2 tool-use-item min-w-0 flex-1">
           <span className="inline-flex items-center rounded-md text-accent py-0.5 text-sm font-medium shrink-0">{message.toolName}</span>
           <span className="text-sm text-muted truncate">{getToolInfo()}</span>
         </div>
+        {getToolInfo() && (
+          <svg
+            className={`h-4 w-4 shrink-0 text-ink-400 transition-transform ${toolDetailOpen ? 'rotate-180' : ''}`}
+            viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+          >
+            <path d="M6 9l6 6 6-6" />
+          </svg>
+        )}
       </div>
+      {toolDetailOpen && (
+        <div className="border-t border-ink-900/5 px-3 py-2">
+          <pre className="text-xs font-mono text-ink-600 whitespace-pre-wrap break-words max-h-48 overflow-y-auto bg-surface-secondary rounded-lg p-2">
+            {JSON.stringify(message.toolInput, null, 2)}
+          </pre>
+        </div>
+      )}
     </div>
   );
 };

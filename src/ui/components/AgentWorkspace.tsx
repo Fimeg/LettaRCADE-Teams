@@ -1084,13 +1084,8 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
         </div>
       </header>
 
-      {/* 3-Pane Layout — collapses to chat-only in focus mode. The SplitPaneGroup
-          re-balances when its children change, so wrapping the side panels +
-          their dividers in `{!focusMode && ...}` is enough. We use a
-          `key` tied to focus state so the group resets cleanly between
-          modes (without it, leftover panel sizes can bleed across). */}
+      {/* 3-Pane Layout — collapses to chat-only in focus mode. */}
       <SplitPaneGroup
-        key={focusMode ? 'focus' : 'full'}
         orientation="horizontal"
         className="flex-1 min-h-0"
       >

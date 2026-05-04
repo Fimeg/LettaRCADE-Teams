@@ -25,6 +25,8 @@ import {
   type Provider,
   type ProviderType,
   type ConnectionMode,
+  type CreateProviderPayload,
+  type UpdateProviderPayload,
 } from '../services/api';
 import { FormField } from './ui/composites/FormField';
 import { Input, inputVariants } from './ui/primitives/Input';
@@ -793,66 +795,25 @@ function ProvidersSection() {
   };
 
   const createProvider = async (formData: ProviderFormData) => {
-    const apiKey = getApiKey();
-    const headers: Record<string, string> = {};
-    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
-
-    const response = await fetch(`${getApiBase().replace(/\/$/, '')}/v1/providers/`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...headers,
-      },
-      body: JSON.stringify({
-        name: formData.name.trim(),
-        provider_type: formData.provider_type,
-        api_key: formData.api_key,
-        ...(formData.base_url && { base_url: formData.base_url }),
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(error || `Server returned ${response.status}`);
-    }
-
-    const newProvider = (await response.json()) as Provider;
+    const payload: CreateProviderPayload = {
+      name: formData.name,
+      provider_type: formData.provider_type,
+      api_key: formData.api_key,
+      base_url: formData.base_url || undefined,
+    };
+    const newProvider = await providersApi.createProvider(payload);
     setProviders((prev) => [...prev, newProvider]);
     setTestResult(null);
   };
 
   const updateProvider = async (formData: ProviderFormData) => {
     if (!editingProvider) return;
-
-    const apiKey = getApiKey();
-    const headers: Record<string, string> = {};
-    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
-
-    const body: Record<string, string> = {
-      name: formData.name.trim(),
+    const payload: UpdateProviderPayload = {
+      name: formData.name,
+      ...(formData.api_key.trim() && { api_key: formData.api_key }),
+      base_url: formData.base_url || undefined,
     };
-    if (formData.api_key.trim()) {
-      body.api_key = formData.api_key;
-    }
-    if (formData.base_url) {
-      body.base_url = formData.base_url;
-    }
-
-    const response = await fetch(`${getApiBase().replace(/\/$/, '')}/v1/providers/${editingProvider.id}`, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        ...headers,
-      },
-      body: JSON.stringify(body),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(error || `Server returned ${response.status}`);
-    }
-
-    const updated = (await response.json()) as Provider;
+    const updated = await providersApi.updateProviderFull(editingProvider.id, payload);
     setProviders((prev) => prev.map((p) => (p.id === editingProvider.id ? updated : p)));
   };
 

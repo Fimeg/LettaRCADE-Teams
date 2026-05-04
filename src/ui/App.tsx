@@ -11,6 +11,7 @@ import { FavoriteAgentView } from "./components/FavoriteAgentView";
 import { LettaCodeLogPanel } from "./components/LettaCodeLogPanel";
 import { OperatorSetupView } from "./components/OperatorSetupView";
 import { StartSessionModal } from "./components/StartSessionModal";
+import { GlobalContextMenu } from "./components/ContextMenu";
 import { useIPC } from "./hooks/useIPC";
 import { TopNav, TopNavTitle, TopNavActions } from "./components/ui/layout/TopNav";
 import { Tabs, TabsList, TabsTrigger } from "./components/ui/layout/Tabs";
@@ -56,6 +57,7 @@ function App() {
 
   // Agent creation wizard
   const [showWizard, setShowWizard] = useState(false);
+  const [shuttingDown, setShuttingDown] = useState(false);
 
   const handleAgentCreated = useCallback(async (agentId: string) => {
     setShowWizard(false);
@@ -192,6 +194,19 @@ function App() {
     } catch { /* ignore */ }
     navigateToAgent(agentId, 'agents');
   }, [navigateToAgent]);
+
+  // Listen for shutdown signal from main process
+  useEffect(() => {
+    const isElectron = typeof window !== 'undefined' && window.electron?.onShuttingDown;
+    if (!isElectron) return;
+
+    const unsub = window.electron.onShuttingDown(() => {
+      console.log('[App] Received shutting-down signal from main process');
+      setShuttingDown(true);
+    });
+
+    return () => unsub();
+  }, []);
 
   const renderMainContent = () => {
     switch (activeTab) {
@@ -389,6 +404,9 @@ function App() {
       {/* Letta-code subprocess debug console (only renders in Electron) */}
       <LettaCodeLogPanel />
 
+      {/* Global right-click context menu */}
+      <GlobalContextMenu />
+
       {/* Global error */}
       {globalError && (
         <div className="fixed bottom-24 left-1/2 z-50 -translate-x-1/2 rounded-xl border border-error/20 bg-error-light px-4 py-3 shadow-lg">
@@ -397,6 +415,17 @@ function App() {
             <button className="text-error hover:text-error/80" onClick={() => setGlobalError(null)}>
               <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12" /></svg>
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Shutdown overlay — shown when main process is quitting */}
+      {shuttingDown && (
+        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-surface/90 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-4">
+            <div className="h-10 w-10 animate-spin rounded-full border-4 border-accent border-t-transparent" />
+            <p className="text-base font-medium text-ink-900">Shutting down...</p>
+            <p className="text-sm text-ink-500">Saving session state and cleaning up.</p>
           </div>
         </div>
       )}

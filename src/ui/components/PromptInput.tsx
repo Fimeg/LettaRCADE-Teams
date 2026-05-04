@@ -85,31 +85,28 @@ export function PromptInput({ sendEvent, onSendMessage, disabled = false }: Prom
     }
   };
 
-  const handleInput = (e: React.FormEvent<HTMLTextAreaElement>) => {
-    const target = e.currentTarget;
+  const resizeTextarea = useCallback((target: HTMLTextAreaElement) => {
     target.style.height = "auto";
     const scrollHeight = target.scrollHeight;
     if (scrollHeight > MAX_HEIGHT) {
       target.style.height = `${MAX_HEIGHT}px`;
       target.style.overflowY = "auto";
     } else {
-      target.style.height = `${scrollHeight}px`;
+      target.style.height = `${Math.max(scrollHeight, LINE_HEIGHT)}px`;
       target.style.overflowY = "hidden";
     }
+  }, []);
+
+  const handleInput = (e: React.FormEvent<HTMLTextAreaElement>) => {
+    requestAnimationFrame(() => resizeTextarea(e.currentTarget));
   };
 
   useEffect(() => {
     if (!promptRef.current) return;
-    promptRef.current.style.height = "auto";
-    const scrollHeight = promptRef.current.scrollHeight;
-    if (scrollHeight > MAX_HEIGHT) {
-      promptRef.current.style.height = `${MAX_HEIGHT}px`;
-      promptRef.current.style.overflowY = "auto";
-    } else {
-      promptRef.current.style.height = `${scrollHeight}px`;
-      promptRef.current.style.overflowY = "hidden";
-    }
-  }, [prompt]);
+    requestAnimationFrame(() => {
+      if (promptRef.current) resizeTextarea(promptRef.current);
+    });
+  }, [prompt, resizeTextarea]);
 
   return (
     <section className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-surface via-surface to-transparent pb-6 px-2 lg:pb-8 pt-8 lg:ml-[280px]">

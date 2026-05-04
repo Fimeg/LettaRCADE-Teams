@@ -1,5 +1,7 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useAppStore } from '../store/useAppStore';
+import { listLLMModels, type LLMModelOption } from '../services/api';
+import * as Popover from '@radix-ui/react-popover';
 
 interface ToolAttachment {
   id: string;
@@ -124,6 +126,7 @@ export function AgentConfigPanel({ agentId }: AgentConfigPanelProps) {
       <div className="flex-1 overflow-y-auto p-4">
         {activeTab === 'settings' && (
           <SettingsTab
+            agentId={agentId}
             agent={agent}
             llmConfig={llmConfig}
             contextWindow={contextWindow}
@@ -196,24 +199,113 @@ interface AgentData {
 }
 
 interface SettingsTabProps {
+  agentId: string;
   agent: AgentData;
   llmConfig?: Record<string, unknown>;
   contextWindow?: number;
   modelSettings?: Record<string, unknown>;
 }
 
-function SettingsTab({ agent, llmConfig, contextWindow, modelSettings }: SettingsTabProps) {
+function SettingsTab({ agentId, agent, llmConfig, contextWindow, modelSettings }: SettingsTabProps) {
   // Extract additional config values
   const temperature = agent.temperature ?? modelSettings?.temperature as number | undefined;
   const maxTokens = modelSettings?.max_tokens as number | undefined;
+  const [models, setModels] = useState<LLMModelOption[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [search, setSearch] = useState('');
+  const [open, setOpen] = useState(false);
+  const updateAgent = useAppStore((s) => s.updateAgent);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  const filtered = useMemo(() => {
+    if (!search) return models;
+    const q = search.toLowerCase();
+    return models.filter((m) =>
+      m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q) || m.provider.toLowerCase().includes(q)
+    );
+  }, [models, search]);
+
+  useEffect(() => {
+    if (!open) return;
+    setSearch('');
+    setModelsLoading(true);
+    listLLMModels().then(setModels).catch((err) => {
+      console.error('[ModelPicker] Failed to load models:', err);
+    }).finally(() => setModelsLoading(false));
+    // Focus search after popover opens
+    requestAnimationFrame(() => searchRef.current?.focus());
+  }, [open]);
+
+  const handleSelect = async (modelId: string) => {
+    setOpen(false);
+    try {
+      await updateAgent(agentId, { model: modelId });
+    } catch {
+      // Error already set in store
+    }
+  };
 
   return (
     <div className="space-y-4">
       <h3 className="text-sm font-semibold text-ink-900 mb-4">Model Configuration</h3>
 
-      {/* Model Name */}
+      {/* Model Name — now a clickable popover trigger */}
       <ConfigCard label="Model">
-        <p className="text-ink-900 font-medium text-sm break-all">{agent.model || 'Not set'}</p>
+        <Popover.Root open={open} onOpenChange={setOpen}>
+          <Popover.Trigger asChild>
+            <button className="w-full text-left text-ink-900 font-medium text-sm break-all hover:text-accent transition-colors cursor-pointer">
+              {agent.model || 'Not set'}
+            </button>
+          </Popover.Trigger>
+          <Popover.Portal>
+            <Popover.Content
+              side="bottom"
+              align="start"
+              sideOffset={4}
+              className="z-50 w-72 rounded-xl border border-ink-900/10 bg-surface shadow-lg"
+            >
+              <div className="p-2 border-b border-ink-900/5">
+                <input
+                  ref={searchRef}
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search models..."
+                  className="w-full px-3 py-1.5 text-sm rounded-lg border border-ink-900/15 bg-surface-secondary text-ink-900 placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-accent/40"
+                />
+              </div>
+              <div className="max-h-60 overflow-y-auto p-1">
+                {modelsLoading ? (
+                  <div className="flex items-center justify-center py-6">
+                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+                  </div>
+                ) : filtered.length === 0 ? (
+                  <p className="text-sm text-ink-500 text-center py-4">
+                    {search ? 'No models match' : 'No models available'}
+                  </p>
+                ) : (
+                  filtered.map((m) => (
+                    <button
+                      key={m.id}
+                      onClick={() => handleSelect(m.id)}
+                      className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors hover:bg-accent/10 ${
+                        m.id === agent.model ? 'bg-accent/10 text-accent' : 'text-ink-900'
+                      }`}
+                    >
+                      <div className="font-medium truncate">{m.name}</div>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-xs text-ink-500">{m.provider}</span>
+                        {m.contextWindow && (
+                          <span className="text-xs text-ink-400">{m.contextWindow.toLocaleString()} ctx</span>
+                        )}
+                      </div>
+                    </button>
+                  ))
+                )}
+              </div>
+              <Popover.Arrow className="fill-ink-900/10" />
+            </Popover.Content>
+          </Popover.Portal>
+        </Popover.Root>
       </ConfigCard>
 
       {/* Temperature */}
