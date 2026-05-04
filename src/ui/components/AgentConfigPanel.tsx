@@ -239,7 +239,32 @@ function SettingsTab({ agentId, agent, llmConfig, contextWindow, modelSettings }
   const handleSelect = async (modelId: string) => {
     setOpen(false);
     try {
-      await updateAgent(agentId, { model: modelId });
+      // Find the selected model to get its context window
+      const selectedModel = models.find((m) => m.id === modelId);
+      const modelContextWindow = selectedModel?.contextWindow;
+
+      // Build FULL PATCH for llm_config - merge existing config with new model
+      const updates: Record<string, unknown> = {};
+
+      // Update the model field
+      updates.model = modelId;
+
+      // Build complete llm_config with existing values + new model + context window
+      const llmUpdates: Record<string, unknown> = {
+        ...llmConfig, // Spread existing llm config
+        model: modelId, // Set model
+        handle: modelId, // Also set handle for compatibility
+      };
+
+      // Auto-set context window from model specs if available
+      if (modelContextWindow) {
+        llmUpdates.context_window = modelContextWindow;
+        updates.context_window_limit = modelContextWindow;
+      }
+
+      updates.llm_config = llmUpdates;
+
+      await updateAgent(agentId, updates);
     } catch {
       // Error already set in store
     }
