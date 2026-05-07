@@ -286,6 +286,18 @@ app.on("ready", () => {
         ipcHandlers.handleClientEvent(data);
     });
 
+    // Forward renderer logs to main process console
+    ipcMain.on("renderer-log", (_event: Electron.IpcMainEvent, data: { level: string; args: any[] }) => {
+        const prefix = '[renderer]';
+        if (data.level === 'error') {
+            console.error(prefix, ...data.args);
+        } else if (data.level === 'warn') {
+            console.warn(prefix, ...data.args);
+        } else {
+            console.log(prefix, ...data.args);
+        }
+    });
+
     // Handle recent cwds request
     ipcMainHandle("get-recent-cwds", () => {
         // TODO: Load from config or database

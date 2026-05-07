@@ -2,7 +2,7 @@
 node_modules/
 
 # Build output
-dist/
+# dist/  -- included in repo for installability
 
 # Environment files
 .env

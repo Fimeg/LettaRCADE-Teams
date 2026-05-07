@@ -188,6 +188,45 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
   const partialMessageRef = useRef("");
   const [partialMessage, setPartialMessage] = useState("");
   const [showPartialMessage, setShowPartialMessage] = useState(false);
+  const flushIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pendingContentRef = useRef("");
+  const pendingReasoningRef = useRef("");
+  const [streamingReasoning, setStreamingReasoning] = useState("");
+  const [streamingToolCall, setStreamingToolCall] = useState<{name: string, args: string} | null>(null);
+  const [streamingToolResult, setStreamingToolResult] = useState<string | null>(null);
+  const [showFullReasoning, setShowFullReasoning] = useState(false);
+  const [showFullToolResult, setShowFullToolResult] = useState(false);
+  const [showFullPartialMessage, setShowFullPartialMessage] = useState(false);
+
+  // Throttled flush for smooth streaming - batches rapid updates to avoid ReactMarkdown re-parsing on every chunk
+  const startThrottledFlush = useCallback(() => {
+    if (flushIntervalRef.current) return;
+    flushIntervalRef.current = setInterval(() => {
+      if (pendingContentRef.current !== partialMessageRef.current) {
+        partialMessageRef.current = pendingContentRef.current;
+        setPartialMessage(pendingContentRef.current);
+      }
+      if (pendingReasoningRef.current !== streamingReasoning) {
+        setStreamingReasoning(pendingReasoningRef.current);
+      }
+    }, 150); // 150ms = ~6.7fps, smooth word-by-word without overwhelming ReactMarkdown
+  }, [streamingReasoning]);
+
+  const stopThrottledFlush = useCallback(() => {
+    if (flushIntervalRef.current) {
+      clearInterval(flushIntervalRef.current);
+      flushIntervalRef.current = null;
+    }
+    // Final flush
+    if (pendingContentRef.current !== partialMessageRef.current) {
+      partialMessageRef.current = pendingContentRef.current;
+      setPartialMessage(pendingContentRef.current);
+    }
+    if (pendingReasoningRef.current !== streamingReasoning) {
+      setStreamingReasoning(pendingReasoningRef.current);
+    }
+  }, [streamingReasoning]);
+
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
   const [hasNewMessages, setHasNewMessages] = useState(false);
   const [showCommands, setShowCommands] = useState(false);
@@ -275,43 +314,95 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
     const event = message.event;
 
     if (event.type === "content_block_start") {
+      pendingContentRef.current = "";
+      pendingReasoningRef.current = "";
       partialMessageRef.current = "";
-      setPartialMessage(partialMessageRef.current);
+      setPartialMessage("");
+      setStreamingReasoning("");
       setShowPartialMessage(true);
+      startThrottledFlush();
     }
 
     if (event.type === "content_block_delta" && event.delta) {
-      const text = event.delta.text || event.delta.reasoning || "";
-      partialMessageRef.current += text;
-      setPartialMessage(partialMessageRef.current);
+      // Separate reasoning from content
+      if (event.delta.reasoning) {
+        pendingReasoningRef.current += event.delta.reasoning;
+      }
+      if (event.delta.text) {
+        pendingContentRef.current += event.delta.text;
+      }
       if (shouldAutoScroll) {
-        // "auto" (instant) instead of "smooth": each chunk would otherwise
-        // start a new smooth-scroll animation, and Chrome's smooth-scroll
-        // can lock out user wheel/touch input mid-animation. With instant
-        // scroll, user gestures take effect immediately.
         messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
       } else {
         setHasNewMessages(true);
       }
     }
 
+    // Tool call from IPC
+    if (event.type === "tool_call" || (event as {message_type?: string}).message_type === "tool_call_message") {
+      const toolEvent = message.event as unknown as { type: string; tool_call?: { name: string; arguments: Record<string, unknown> }; toolName?: string; toolInput?: Record<string, unknown> };
+      const name = toolEvent.tool_call?.name || toolEvent.toolName || 'unknown';
+      const args = toolEvent.tool_call?.arguments || toolEvent.toolInput || {};
+      console.log('[AgentWorkspace] IPC tool call:', name, args);
+      setStreamingToolCall({
+        name,
+        args: JSON.stringify(args, null, 2)
+      });
+    }
+
+    // Tool return from IPC
+    if (event.type === "tool_return" || (event as {message_type?: string}).message_type === "tool_return_message") {
+      const returnEvent = message.event as unknown as { type: string; tool_return?: unknown; output?: unknown; result?: unknown };
+      // Handle non-string outputs (objects, arrays, etc)
+      let output: string;
+      const rawOutput = returnEvent.tool_return ?? returnEvent.output ?? returnEvent.result ?? "";
+      if (typeof rawOutput === 'string') {
+        output = rawOutput;
+      } else if (rawOutput !== null && rawOutput !== undefined) {
+        try {
+          output = JSON.stringify(rawOutput, null, 2);
+        } catch {
+          output = String(rawOutput);
+        }
+      } else {
+        output = "";
+      }
+      console.log('[AgentWorkspace] IPC tool return:', output.slice(0, 100), `(${output.length} chars)`);
+      setStreamingToolResult(output);
+      setStreamingToolCall(null);
+    }
+
     if (event.type === "content_block_stop") {
+      stopThrottledFlush();
       setShowPartialMessage(false);
       setTimeout(() => {
         partialMessageRef.current = "";
-        setPartialMessage(partialMessageRef.current);
+        pendingContentRef.current = "";
+        pendingReasoningRef.current = "";
+        setPartialMessage("");
+        setStreamingReasoning("");
       }, 500);
     }
-  }, [shouldAutoScroll]);
+  }, [shouldAutoScroll, startThrottledFlush, stopThrottledFlush]);
 
   // Post-stream cleanup: shared between IPC and browser paths.
   const completeStream = useCallback(() => {
+    stopThrottledFlush();
     setShowPartialMessage(false);
     partialMessageRef.current = '';
+    pendingContentRef.current = '';
+    pendingReasoningRef.current = '';
     setPartialMessage('');
+    setStreamingReasoning('');
+    setStreamingToolCall(null);
+    setStreamingToolResult(null);
     setPendingUserMessage(null);
     pendingIpcStreamRef.current = false;
-  }, []);
+    // Reset "show full" flags for next stream
+    setShowFullReasoning(false);
+    setShowFullToolResult(false);
+    setShowFullPartialMessage(false);
+  }, [stopThrottledFlush]);
 
   // Event handler for IPC
   const onEvent = useCallback((event: ServerEvent) => {
@@ -839,40 +930,61 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
 
     try {
       const stream = streamMessage(userMsg);
-      let assistantContent = '';
+      pendingContentRef.current = '';
+      pendingReasoningRef.current = '';
+      setStreamingToolCall(null);
+      setStreamingToolResult(null);
+      startThrottledFlush();
 
       for await (const chunk of stream) {
         switch (chunk.type) {
           case 'assistant':
-            assistantContent += chunk.content;
-            partialMessageRef.current = assistantContent;
-            setPartialMessage(assistantContent);
+            pendingContentRef.current += chunk.content;
             if (shouldAutoScroll) {
               messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
             }
             break;
           case 'reasoning':
-            await loadMessages(convId);
+            pendingReasoningRef.current += chunk.reasoning;
             break;
-          case 'tool_call':
-            await loadMessages(convId);
+          case 'tool_call': {
+            // Defensive - chunk shape varies by SDK version
+            const toolName = (chunk as {name?: string; toolName?: string}).name || (chunk as {name?: string; toolName?: string}).toolName || 'unknown';
+            const toolArgs = (chunk as {arguments?: Record<string, unknown>; toolInput?: Record<string, unknown>}).arguments || (chunk as {arguments?: Record<string, unknown>; toolInput?: Record<string, unknown>}).toolInput || {};
+            console.log('[AgentWorkspace] Tool call:', toolName, toolArgs);
+            setStreamingToolCall({
+              name: toolName,
+              args: JSON.stringify(toolArgs, null, 2)
+            });
             break;
-          case 'tool_return':
-            await loadMessages(convId);
+          }
+          case 'tool_return': {
+            const output = (chunk as {output?: string; tool_return?: string; result?: string}).output || (chunk as {output?: string; tool_return?: string; result?: string}).tool_return || (chunk as {output?: string; tool_return?: string; result?: string}).result || '';
+            console.log('[AgentWorkspace] Tool return:', output.slice(0, 100));
+            setStreamingToolResult(output);
+            setStreamingToolCall(null);
             break;
+          }
           case 'error':
-            partialMessageRef.current += `\n\nError: ${chunk.message}`;
-            setPartialMessage(partialMessageRef.current);
+            pendingContentRef.current += `\n\nError: ${chunk.message}`;
             break;
         }
       }
 
+      stopThrottledFlush();
       await loadMessages(convId);
     } catch (err) {
       console.error('[AgentWorkspace] Stream error:', err);
-      partialMessageRef.current += `\n\nStream error: ${err instanceof Error ? err.message : 'Unknown error'}`;
-      setPartialMessage(partialMessageRef.current);
+      stopThrottledFlush();
+      pendingContentRef.current += `\n\nStream error: ${err instanceof Error ? err.message : 'Unknown error'}`;
+      partialMessageRef.current = pendingContentRef.current;
+      setPartialMessage(pendingContentRef.current);
     } finally {
+      // Clear streaming states
+      pendingReasoningRef.current = '';
+      setStreamingReasoning('');
+      setStreamingToolCall(null);
+      setStreamingToolResult(null);
       completeStream();
     }
   }, [inputValue, activeConversationId, isStreaming, handleSlashCommand, resetToLatest, shouldAutoScroll, agentId, createConversation, setActiveConversationId, sendEvent]);
@@ -1403,13 +1515,82 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
                   )}
                 </ToolStatusProvider>
 
-                {partialMessage && (
-                  <div className="partial-message mt-4">
-                    <div className="header text-accent">{nickname || agent.name || 'Assistant'}</div>
-                    <MDContent text={partialMessage} />
+                {/* Streaming reasoning display - limited to prevent UI freeze */}
+                {streamingReasoning && streamingReasoning.length > 0 && (
+                  <div className="mt-4 rounded-lg bg-ink-900/5 border border-ink-900/10 overflow-hidden">
+                    <div className="p-3">
+                      <div className="text-xs text-ink-500 mb-1 flex items-center justify-between">
+                        <span>Thinking... ({streamingReasoning.length} chars)</span>
+                        {streamingReasoning.length > 500 && (
+                          <button
+                            onClick={() => setShowFullReasoning(!showFullReasoning)}
+                            className="text-accent hover:underline text-xs"
+                          >
+                            {showFullReasoning ? 'Show less' : 'Show full'}
+                          </button>
+                        )}
+                      </div>
+                      <div className={`text-sm text-ink-700 italic whitespace-pre-wrap ${showFullReasoning ? 'max-h-96 overflow-y-auto' : 'max-h-32 overflow-hidden'}`}>
+                        {streamingReasoning}
+                      </div>
+                    </div>
                   </div>
                 )}
-                {showPartialMessage && !partialMessage && (
+
+                {/* Streaming tool call display */}
+                {streamingToolCall && (
+                  <div className="mt-4 p-3 rounded-lg bg-accent/5 border border-accent/20">
+                    <div className="text-xs text-accent mb-1">Using tool: {streamingToolCall.name}</div>
+                    <pre className="text-xs text-ink-600 overflow-x-auto max-h-32">{streamingToolCall.args.slice(0, 500)}</pre>
+                  </div>
+                )}
+
+                {/* Streaming tool result display - limited to prevent UI freeze on large outputs */}
+                {streamingToolResult && streamingToolResult.length > 0 && (
+                  <div className="mt-2 rounded-lg bg-green-50 border border-green-200 overflow-hidden">
+                    <div className="p-3">
+                      <div className="text-xs text-green-600 mb-1 flex items-center justify-between">
+                        <span>Tool result ({streamingToolResult.length.toLocaleString()} chars)</span>
+                        {streamingToolResult.length > 1000 && (
+                          <button
+                            onClick={() => setShowFullToolResult(!showFullToolResult)}
+                            className="text-green-700 hover:underline text-xs"
+                          >
+                            {showFullToolResult ? 'Show less' : 'Show full output'}
+                          </button>
+                        )}
+                      </div>
+                      <pre className={`text-xs text-ink-600 whitespace-pre-wrap break-all ${showFullToolResult ? 'max-h-[60vh] overflow-y-auto' : 'max-h-48 overflow-hidden'}`}>
+                        {streamingToolResult}
+                      </pre>
+                    </div>
+                  </div>
+                )}
+
+                {partialMessage && partialMessage.length > 0 && (
+                  <div className="partial-message mt-4">
+                    <div className="header text-accent flex items-center justify-between">
+                      <span>{nickname || agent.name || 'Assistant'}</span>
+                      {partialMessage.length > 5000 && (
+                        <button
+                          onClick={() => setShowFullPartialMessage(!showFullPartialMessage)}
+                          className="text-accent hover:underline text-xs"
+                        >
+                          {showFullPartialMessage ? 'Show less' : 'Show full response'}
+                        </button>
+                      )}
+                    </div>
+                    <div className={showFullPartialMessage ? '' : 'max-h-[50vh] overflow-y-auto'}>
+                      <MDContent text={partialMessage.slice(0, showFullPartialMessage ? 50000 : 5000)} />
+                    </div>
+                    {!showFullPartialMessage && partialMessage.length > 5000 && (
+                      <div className="text-xs text-ink-400 mt-2 text-center">
+                        ... ({(partialMessage.length - 5000).toLocaleString()} more characters)
+                      </div>
+                    )}
+                  </div>
+                )}
+                {showPartialMessage && !partialMessage && !streamingReasoning && !streamingToolCall && (
                   <div className="mt-3 flex flex-col gap-2 px-1">
                     <div className="relative h-3 w-2/12 overflow-hidden rounded-full bg-ink-900/10">
                       <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-ink-900/30 to-transparent animate-shimmer" />

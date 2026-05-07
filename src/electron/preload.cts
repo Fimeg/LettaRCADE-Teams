@@ -128,3 +128,18 @@ function ipcOn<Key extends keyof EventPayloadMapping>(key: Key, callback: (paylo
     electron.ipcRenderer.on(key, cb);
     return () => electron.ipcRenderer.off(key, cb)
 }
+
+// Forward renderer console logs to main process for easier debugging
+const originalConsole = { ...console };
+console.log = (...args: any[]) => {
+    originalConsole.log(...args);
+    electron.ipcRenderer.send('renderer-log', { level: 'log', args });
+};
+console.error = (...args: any[]) => {
+    originalConsole.error(...args);
+    electron.ipcRenderer.send('renderer-log', { level: 'error', args });
+};
+console.warn = (...args: any[]) => {
+    originalConsole.warn(...args);
+    electron.ipcRenderer.send('renderer-log', { level: 'warn', args });
+};

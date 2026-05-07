@@ -7,7 +7,7 @@
 	"scripts": {
 		"rebuild": "npx electron-rebuild -f -w better-sqlite3",
 		"postinstall": "npm run rebuild",
-		"dev": "concurrently -k --kill-others-on-fail \"bun run dev:react\" \"bun run dev:electron\",
+		"dev": "concurrently -k --kill-others-on-fail \"bun run dev:react\" \"bun run dev:electron\"",
 		"dev:react": "vite",
 		"dev:electron": "bun run transpile:electron && cross-env NODE_ENV=development electron .",
 		"build": "tsc -b && vite build",
@@ -24,6 +24,7 @@
 		"@letta-ai/letta-code-sdk": "^0.1.14",
 		"@radix-ui/react-dialog": "^1.1.15",
 		"@radix-ui/react-dropdown-menu": "^2.1.16",
+		"@radix-ui/react-popover": "1.1.15",
 		"@tailwindcss/vite": "^4.1.18",
 		"better-sqlite3": "^12.6.0",
 		"class-variance-authority": "0.7.1",

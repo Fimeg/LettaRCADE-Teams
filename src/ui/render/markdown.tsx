@@ -4,6 +4,20 @@ import rehypeRaw from "rehype-raw";
 import remarkGfm from "remark-gfm";
 
 export default function MDContent({ text }: { text: string }) {
+  const content = String(text ?? "");
+
+  // Limit content length to prevent ReactMarkdown from freezing on huge inputs
+  if (content.length > 50000) {
+    return (
+      <div className="text-ink-700">
+        <pre className="whitespace-pre-wrap break-all">{content.slice(0, 50000)}</pre>
+        <div className="text-sm text-ink-400 mt-2">
+          ... ({(content.length - 50000).toLocaleString()} more characters)
+        </div>
+      </div>
+    );
+  }
+
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -41,7 +55,7 @@ export default function MDContent({ text }: { text: string }) {
         }
       }}
     >
-      {String(text ?? "")}
+      {content}
     </ReactMarkdown>
   )
 }
