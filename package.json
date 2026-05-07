@@ -6,7 +6,8 @@
 	"main": "dist-electron/main.js",
 	"scripts": {
 		"rebuild": "npx electron-rebuild -f -w better-sqlite3",
-		"dev": "concurrently -k --kill-others-on-fail \"bun run dev:react\" \"bun run dev:electron\"",
+		"postinstall": "npm run rebuild",
+		"dev": "concurrently -k --kill-others-on-fail \"bun run dev:react\" \"bun run dev:electron\",
 		"dev:react": "vite",
 		"dev:electron": "bun run transpile:electron && cross-env NODE_ENV=development electron .",
 		"build": "tsc -b && vite build",
