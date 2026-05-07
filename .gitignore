@@ -38,3 +38,17 @@ docs/
 
 # Claude Code transcripts (timestamped exports)
 [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.txt
+
+# Dev documentation - local only (not in git history going forward)
+CLAUDE.md
+ETHOS.md
+AUDIT_ISSUES.md
+HANDOFF_TEAMS.md
+LETTA_TEAMS_INTEGRATION_PLAN.md
+TEAMS_IMPLEMENTATION_PLAN.md
+NEXT_SESSION.md
+PROBLEMS.md
+STATUS.md
+SESSION_2026-04-28.md
+yoyomerge.txt
+FIX_PROCEDURE_*.md
