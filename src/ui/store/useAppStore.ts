@@ -806,6 +806,10 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       case "session.status": {
         const { sessionId, status, title, cwd, agentId } = event.payload as { sessionId: string; status: SessionStatus; title?: string; cwd?: string; agentId?: string };
+
+        // Treat "idle" (after abort) similarly to "completed" for pendingStart
+        const isTerminalStatus = status === "completed" || status === "error" || status === "idle";
+
         set((state) => {
           const existing = state.sessions[sessionId] ?? createSession(sessionId);
           return {
@@ -817,13 +821,15 @@ export const useAppStore = create<AppState>((set, get) => ({
                 title: title ?? existing.title,
                 cwd: cwd ?? existing.cwd,
                 agentId: agentId ?? existing.agentId,
-                updatedAt: Date.now()
+                updatedAt: Date.now(),
+                // Clear permission requests on abort/idle
+                ...(status === "idle" ? { permissionRequests: [] } : {})
               }
             }
           };
         });
 
-        if (state.pendingStart) {
+        if (state.pendingStart && isTerminalStatus) {
           get().setActiveSessionId(sessionId);
           if (agentId) {
             get().setSelectedAgentId(agentId);

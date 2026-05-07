@@ -2,6 +2,29 @@ import { app, BrowserWindow, ipcMain, dialog, globalShortcut, Menu } from "elect
 import { execSync } from "child_process";
 import { config as dotenvConfig } from "dotenv";
 import { join } from "path";
+import { writeFileSync, appendFileSync, existsSync, mkdirSync } from "fs";
+import { format } from "util";
+
+// Setup persistent file logging
+const LOG_DIR = join(app.getPath('userData'), 'logs');
+const LOG_FILE = join(LOG_DIR, `app-${new Date().toISOString().split('T')[0]}.log`);
+if (!existsSync(LOG_DIR)) mkdirSync(LOG_DIR, { recursive: true });
+
+// Create fresh log file with header
+writeFileSync(LOG_FILE, `[${new Date().toISOString()}] === Letta OSS UI Log Started ===\n`);
+
+// Override console methods to also write to file
+const originalConsole = { log: console.log, error: console.error, warn: console.warn };
+function logToFile(level: string, args: any[]) {
+    try {
+        const msg = `[${new Date().toISOString()}] [${level}] ${args.map(a => typeof a === 'string' ? a : format('%o', a)).join(' ')}\n`;
+        appendFileSync(LOG_FILE, msg);
+    } catch { /* ignore */ }
+}
+console.log = (...args: any[]) => { originalConsole.log(...args); logToFile('LOG', args); };
+console.error = (...args: any[]) => { originalConsole.error(...args); logToFile('ERR', args); };
+console.warn = (...args: any[]) => { originalConsole.warn(...args); logToFile('WRN', args); };
+console.log(`[main] Logs written to: ${LOG_FILE}`);
 import { ipcMainHandle, isDev, DEV_PORT } from "./util.js";
 import { loadConfig, saveConfig, type Config } from "./config.js";
 import { loadOperatorProfile, saveOperatorProfile } from "./operatorProfile.js";

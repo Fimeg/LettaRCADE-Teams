@@ -24,8 +24,10 @@ export function ToolStatusProvider({ children }: { children: React.ReactNode }) 
       next.set(toolCallId, status);
       return next;
     });
-    // Notify all listeners
-    listeners.forEach(listener => listener());
+    // Defer listener notifications to avoid setState-during-render crash
+    setTimeout(() => {
+      listeners.forEach(listener => listener());
+    }, 0);
   }, [listeners]);
 
   const subscribe = useCallback((callback: () => void) => {

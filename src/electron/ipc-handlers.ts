@@ -22,7 +22,10 @@ const debug = (msg: string, data?: Record<string, unknown>) => {
 
 function broadcast(event: ServerEvent) {
   const payload = JSON.stringify(event);
+  // Log every broadcast to see what's being sent
+  log(`BROADCAST type=${event.type}`, { payload: payload.length > 1000 ? payload.slice(0, 1000) + '...' : payload });
   const windows = BrowserWindow.getAllWindows();
+  log(`BROADCAST sending to ${windows.length} windows`);
   for (const win of windows) {
     win.webContents.send("server-event", payload);
   }
@@ -125,6 +128,16 @@ export class IPCHandlers {
   if (event.type === "session.stop") {
     const { sessionId } = event.payload;
     debug("session.stop", { sessionId });
+
+    // Deny any pending permission requests before aborting
+    const pendingTools = this.sessionManager.getPendingToolUseIds();
+    for (const toolUseId of pendingTools) {
+      this.sessionManager.resolvePendingTool(toolUseId, {
+        behavior: "deny",
+        message: "Aborted by user"
+      });
+    }
+
     await this.sessionManager.abort(sessionId);
     return;
   }

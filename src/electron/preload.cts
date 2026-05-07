@@ -20,11 +20,18 @@ electron.contextBridge.exposeInMainWorld("electron", {
     },
     onServerEvent: (callback: (event: any) => void) => {
         const cb = (_: Electron.IpcRendererEvent, payload: string) => {
+            console.log('[PRELOAD] ========== server-event RECEIVED ==========');
+            console.log('[PRELOAD] Raw payload length:', payload.length);
+            console.log('[PRELOAD] First 500 chars:', payload.slice(0, 500));
             try {
                 const event = JSON.parse(payload);
+                console.log('[PRELOAD] Parsed event type:', event.type);
+                console.log('[PRELOAD] Parsed event:', JSON.stringify(event, null, 2).slice(0, 1000));
+                console.log('[PRELOAD] ========== CALLING CALLBACK ==========');
                 callback(event);
+                console.log('[PRELOAD] ========== CALLBACK DONE ==========');
             } catch (error) {
-                console.error("Failed to parse server event:", error);
+                console.error('[PRELOAD] Failed to parse server event:', error);
             }
         };
         electron.ipcRenderer.on("server-event", cb);

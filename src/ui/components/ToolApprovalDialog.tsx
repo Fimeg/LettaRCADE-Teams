@@ -24,9 +24,6 @@ interface ToolApprovalDialogProps {
  */
 export function ToolApprovalDialog({ request, onRespond }: ToolApprovalDialogProps) {
   const [remember, setRemember] = useState(false);
-
-  if (!request) return null;
-
   const handleAllow = useCallback(() => {
     onRespond(true);
   }, [onRespond]);
@@ -45,6 +42,8 @@ export function ToolApprovalDialog({ request, onRespond }: ToolApprovalDialogPro
       return String(input);
     }
   };
+
+  if (!request) return null;
 
   return (
     <Modal key={request.toolUseId} open={true} onOpenChange={(open) => { if (!open) onRespond(false); }}>

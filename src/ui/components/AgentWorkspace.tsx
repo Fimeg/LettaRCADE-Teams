@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { SplitPanePanel, SplitPaneGroup, SplitPaneDivider } from "./ui/layout/SplitPane";
 import { useAppStore, isMemfsEnabledAgent, isConversationStale } from "../store/useAppStore";
 import { useMessageWindow } from "../hooks/useMessageWindow";
@@ -9,20 +9,202 @@ import { getLettaClient } from "../services/api";
 import type { Letta } from "@letta-ai/letta-client";
 import { slashCommandHandlers } from "../services/slashCommands";
 import type { ClientEvent, ServerEvent } from "../types";
-import { MessageCard } from "./EventCard";
 import MDContent from "../render/markdown";
 import { AgentMemoryPanel } from "./AgentMemoryPanel";
-import { ToolStatusProvider } from "../contexts";
 import { ToolApprovalDialog } from "./ToolApprovalDialog";
+import { MessageCard } from "./EventCard";
 import ConnectionModeIndicator, { ConnectionMode } from "./ConnectionModeIndicator";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { useAgentNickname } from "../hooks/useAgentNickname";
 import { Input } from "./ui/primitives/Input";
 import { FormField } from "./ui/composites/FormField";
 import { inputVariants } from "./ui/primitives/Input";
+import { ToolStatusProvider } from "../contexts";
 
 const SCROLL_THRESHOLD = 50;
 const STALE_CONVERSATION_DAYS = 14;
+
+// Tool output limits - prevent UI freeze on large outputs
+const TOOL_OUTPUT_LIMIT = 30000; // 30K chars max for display
+const DEFAULT_COLLAPSED_LINES = 3;
+const DEFAULT_MAX_CHARS = 300;
+
+/**
+ * Sanitize tool output for safe rendering.
+ * Removes control characters, null bytes, and terminal escape codes.
+ */
+function sanitizeToolOutput(output: string): string {
+  if (!output || typeof output !== 'string') return '';
+
+  // Remove null bytes (binary indicator)
+  let sanitized = output.replace(/\x00/g, '');
+
+  // Remove terminal escape sequences (ANSI codes)
+  // Pattern matches CSI sequences like \x1b[31m (colors) and other escape codes
+  sanitized = sanitized.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+  sanitized = sanitized.replace(/\x1b][0-9];.*?\x07/g, ''); // OSC sequences
+  sanitized = sanitized.replace(/\x1b[()][0-9A-Za-z]/g, ''); // Character set sequences
+
+  // Remove other control characters except common whitespace
+  // Keep: \n (10), \r (13), \t (9)
+  sanitized = sanitized.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+
+  return sanitized;
+}
+
+/**
+ * Clip tool output for display with line and character limits.
+ * Similar to letta-code's clipToolReturn - prevents UI freeze on large outputs.
+ *
+ * @param text - Raw tool output
+ * @param maxLines - Max lines to show (default 3)
+ * @param maxChars - Max characters (default 300)
+ * @returns Object with clipped text and metadata
+ */
+function clipToolOutput(
+  text: string,
+  maxLines: number = DEFAULT_COLLAPSED_LINES,
+  maxChars: number = DEFAULT_MAX_CHARS
+): { display: string; totalLines: number; hiddenLines: number; clipped: boolean } {
+  if (!text) return { display: '', totalLines: 0, hiddenLines: 0, clipped: false };
+
+  const totalLines = text.split('\n').length;
+
+  // Don't clip user rejection reasons - they contain important feedback
+  if (text.includes('request to call tool denied')) {
+    return { display: text, totalLines, hiddenLines: 0, clipped: false };
+  }
+
+  // Hard limit for absolute safety
+  const HARD_LIMIT = 10000;
+  let clipped = text.length > HARD_LIMIT ? text.slice(0, HARD_LIMIT) : text;
+
+  // Apply character limit
+  if (clipped.length > maxChars) {
+    clipped = clipped.slice(0, maxChars);
+  }
+
+  // Split into lines and limit
+  let lines = clipped.split('\n');
+
+  // Remove trailing empty line from final newline
+  if (lines.length > 0 && lines[lines.length - 1] === '') {
+    lines.pop();
+  }
+
+  const hiddenLines = Math.max(0, lines.length - maxLines);
+  const visibleLines = lines.slice(0, maxLines);
+  let display = visibleLines.join('\n');
+
+  const wasClipped = text.length > maxChars || totalLines > maxLines;
+
+  // Add ellipsis if truncated
+  if (wasClipped || display.length < text.length) {
+    // Try to break at word boundary if possible
+    const lastSpace = display.lastIndexOf(' ');
+    if (lastSpace > maxChars * 0.8 && display.length > maxChars) {
+      display = display.slice(0, lastSpace);
+    }
+    display += '…';
+  }
+
+  return { display, totalLines, hiddenLines, clipped: wasClipped };
+}
+
+/**
+ * Safe tool output display component with error boundary pattern.
+ * Prevents blank screen crashes by catching render errors.
+ */
+interface SafeToolOutputProps {
+  output: string;
+  maxLines?: number;
+  maxChars?: number;
+  isExpanded: boolean;
+  onToggleExpand: () => void;
+  onClippedInfo?: (info: { totalLines: number; hiddenLines: number; clipped: boolean }) => void;
+}
+
+function SafeToolOutput({
+  output,
+  maxLines = DEFAULT_COLLAPSED_LINES,
+  maxChars = DEFAULT_MAX_CHARS,
+  isExpanded,
+  onToggleExpand,
+  onClippedInfo,
+}: SafeToolOutputProps) {
+  console.log('[SAFETOOL] ========== COMPONENT RENDER ==========');
+  console.log('[SAFETOOL] Props received - output length:', output?.length, 'isExpanded:', isExpanded);
+
+  // Compute clipped output
+  const clipped = useMemo(() => {
+    console.log('[SAFETOOL] useMemo: computing clipped output...');
+    console.log('[SAFETOOL] Input output length:', output.length);
+    const sanitized = sanitizeToolOutput(output);
+    console.log('[SAFETOOL] After sanitize, length:', sanitized.length);
+    if (isExpanded) {
+      // When expanded, just apply hard char limit for safety
+      if (sanitized.length > TOOL_OUTPUT_LIMIT) {
+        const hardClipped = sanitized.slice(0, TOOL_OUTPUT_LIMIT);
+        const omitted = sanitized.length - TOOL_OUTPUT_LIMIT;
+        console.log('[SAFETOOL] Expanded view, hard-clipped to', TOOL_OUTPUT_LIMIT);
+        return {
+          display: hardClipped + `\n\n[Output truncated: ${omitted.toLocaleString()} more characters]`,
+          totalLines: sanitized.split('\n').length,
+          hiddenLines: 0,
+          clipped: true,
+        };
+      }
+      console.log('[SAFETOOL] Expanded view, showing full sanitized');
+      return {
+        display: sanitized,
+        totalLines: sanitized.split('\n').length,
+        hiddenLines: 0,
+        clipped: false,
+      };
+    }
+    const result = clipToolOutput(sanitized, maxLines, maxChars);
+    console.log('[SAFETOOL] Collapsed view - clipped result:', { totalLines: result.totalLines, hiddenLines: result.hiddenLines, clipped: result.clipped, displayLength: result.display.length });
+    return result;
+  }, [output, isExpanded, maxLines, maxChars]);
+
+  // Notify parent of clipped info
+  useEffect(() => {
+    console.log('[SAFETOOL] Effect: notifying parent of clipped info', { totalLines: clipped.totalLines, hiddenLines: clipped.hiddenLines });
+    onClippedInfo?.({
+      totalLines: clipped.totalLines,
+      hiddenLines: clipped.hiddenLines,
+      clipped: clipped.clipped,
+    });
+  }, [clipped, onClippedInfo]);
+
+  const shouldShowExpandButton = clipped.clipped || output.length > maxChars || clipped.totalLines > maxLines;
+  console.log('[SAFETOOL] shouldShowExpandButton:', shouldShowExpandButton);
+  console.log('[SAFETOOL] About to return JSX...');
+
+  return (
+    <div className="space-y-1">
+      <div
+        className={`text-xs text-ink-600 font-mono ${isExpanded ? 'max-h-[60vh] overflow-y-auto' : ''}`}
+        style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+      >
+        {(() => { console.log('[SAFETOOL] Rendering clipped.display, length:', clipped.display.length); return clipped.display; })()}
+      </div>
+      {shouldShowExpandButton && (
+        <div className="flex items-center justify-between text-xs">
+          {!isExpanded && clipped.hiddenLines > 0 && (
+            <span className="text-ink-400">… +{clipped.hiddenLines} lines</span>
+          )}
+          <button
+            onClick={() => { console.log('[SAFETOOL] Toggle expand clicked'); onToggleExpand(); }}
+            className="text-green-700 hover:underline"
+          >
+            {isExpanded ? 'Show less' : clipped.hiddenLines > 0 ? 'Show full output' : 'Show more'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function conversationLastActivity(conv: { last_message_at?: string | null; updated_at?: string | null; created_at?: string | null }): number | null {
   const ts = conv.last_message_at ?? conv.updated_at ?? conv.created_at ?? null;
@@ -85,6 +267,11 @@ interface ToolInfo {
 }
 
 export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspaceProps) {
+  // Error boundary state to catch render crashes
+  const [renderError, setRenderError] = useState<Error | null>(null);
+  // Error boundary for message list (isolated from main render)
+  const [messageListCrashError, setMessageListCrashError] = useState<Error | null>(null);
+
   // Store integration
   const agent = useAppStore((s) => s.agents[agentId]);
   const loadAgent = useAppStore((s) => s.loadAgent);
@@ -197,6 +384,10 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
   const [showFullReasoning, setShowFullReasoning] = useState(false);
   const [showFullToolResult, setShowFullToolResult] = useState(false);
   const [showFullPartialMessage, setShowFullPartialMessage] = useState(false);
+  // Track clipped output info for line-based truncation display
+  const clippedOutputRef = useRef<{ totalLines: number; hiddenLines: number; clipped: boolean }>({ totalLines: 0, hiddenLines: 0, clipped: false });
+  // Interrupt state - prevents double-clicks and blocks sends briefly during cleanup
+  const [isInterrupted, setIsInterrupted] = useState(false);
 
   // Throttled flush for smooth streaming - batches rapid updates to avoid ReactMarkdown re-parsing on every chunk
   const startThrottledFlush = useCallback(() => {
@@ -282,6 +473,7 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
   const {
     sendMessage: streamMessage,
     isStreaming,
+    abort: abortStream,
   } = useStreamingMessages(agentId, activeConversationId);
 
   // Load agent if not loaded
@@ -298,6 +490,13 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
       setSystemDraft(String(agent.raw.system ?? ''));
     }
   }, [agent?.raw, populateConfigForm]);
+
+  // Load messages when conversation changes
+  useEffect(() => {
+    if (activeConversationId) {
+      loadMessages(activeConversationId);
+    }
+  }, [activeConversationId, loadMessages]);
 
   // Load agent tools
   useEffect(() => {
@@ -352,24 +551,47 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
 
     // Tool return from IPC
     if (event.type === "tool_return" || (event as {message_type?: string}).message_type === "tool_return_message") {
-      const returnEvent = message.event as unknown as { type: string; tool_return?: unknown; output?: unknown; result?: unknown };
-      // Handle non-string outputs (objects, arrays, etc)
-      let output: string;
-      const rawOutput = returnEvent.tool_return ?? returnEvent.output ?? returnEvent.result ?? "";
-      if (typeof rawOutput === 'string') {
-        output = rawOutput;
-      } else if (rawOutput !== null && rawOutput !== undefined) {
-        try {
-          output = JSON.stringify(rawOutput, null, 2);
-        } catch {
-          output = String(rawOutput);
+      console.log('[AGENTWORKSPACE] ========== TOOL_RETURN RECEIVED ==========');
+      console.log('[AGENTWORKSPACE] Raw message:', JSON.stringify(message, null, 2));
+      try {
+        const returnEvent = message.event as unknown as { type: string; tool_return?: unknown; output?: unknown; result?: unknown };
+        console.log('[AGENTWORKSPACE] returnEvent:', returnEvent);
+        // Handle non-string outputs (objects, arrays, etc)
+        let output: string;
+        const rawOutput = returnEvent.tool_return ?? returnEvent.output ?? returnEvent.result ?? "";
+        console.log('[AGENTWORKSPACE] rawOutput type:', typeof rawOutput, 'length:', String(rawOutput).length);
+        if (typeof rawOutput === 'string') {
+          output = rawOutput;
+          console.log('[AGENTWORKSPACE] Output is string, length:', output.length);
+          console.log('[AGENTWORKSPACE] First 200 chars:', output.slice(0, 200));
+        } else if (rawOutput !== null && rawOutput !== undefined) {
+          try {
+            output = JSON.stringify(rawOutput, null, 2);
+            console.log('[AGENTWORKSPACE] Output stringified from object');
+          } catch {
+            output = String(rawOutput);
+            console.log('[AGENTWORKSPACE] Output converted via String()');
+          }
+        } else {
+          output = "";
+          console.log('[AGENTWORKSPACE] Output is empty string (raw was null/undefined)');
         }
-      } else {
-        output = "";
+        console.log('[AGENTWORKSPACE] About to sanitize, output length:', output.length);
+        // Sanitize output for safe rendering
+        output = sanitizeToolOutput(output);
+        console.log('[AGENTWORKSPACE] Sanitized output length:', output.length);
+        console.log('[AGENTWORKSPACE] Setting streamingToolResult...');
+        setStreamingToolResult(output);
+        console.log('[AGENTWORKSPACE] streamingToolResult state set');
+        setStreamingToolCall(null);
+        console.log('[AGENTWORKSPACE] streamingToolCall cleared');
+      } catch (err) {
+        console.error('[AGENTWORKSPACE] CRASH in tool_return handler:', err);
+        // Set a safe fallback message instead of crashing
+        setStreamingToolResult('[Error: Unable to display tool output]');
+        setStreamingToolCall(null);
       }
-      console.log('[AgentWorkspace] IPC tool return:', output.slice(0, 100), `(${output.length} chars)`);
-      setStreamingToolResult(output);
-      setStreamingToolCall(null);
+      console.log('[AGENTWORKSPACE] ========== TOOL_RETURN DONE ==========');
     }
 
     if (event.type === "content_block_stop") {
@@ -436,11 +658,15 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
   const resolvePermissionRequest = useAppStore((s) => s.resolvePermissionRequest);
   const activeSession = activeConversationId ? sessions[activeConversationId] : undefined;
   const permissionRequests = activeSession?.permissionRequests ?? [];
+  console.log('[AgentWorkspace] permissionRequests count:', permissionRequests.length);
 
   // Latest unresolved request drives the modal
   const latestPermissionRequest = permissionRequests.length > 0
     ? permissionRequests[permissionRequests.length - 1]
     : null;
+  if (latestPermissionRequest) {
+    console.log('[AgentWorkspace] latestPermissionRequest:', latestPermissionRequest);
+  }
 
   const handlePermissionResponse = useCallback((allow: boolean) => {
     if (!latestPermissionRequest) return;
@@ -856,7 +1082,7 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
   const pendingIpcStreamRef = useRef<boolean>(false);
 
   const handleInputSend = useCallback(async () => {
-    if (!inputValue.trim() || isStreaming) return;
+    if (!inputValue.trim() || isStreaming || isInterrupted) return;
 
     const isElectron = typeof window !== 'undefined' && window.electron;
 
@@ -959,10 +1185,26 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
             break;
           }
           case 'tool_return': {
-            const output = (chunk as {output?: string; tool_return?: string; result?: string}).output || (chunk as {output?: string; tool_return?: string; result?: string}).tool_return || (chunk as {output?: string; tool_return?: string; result?: string}).result || '';
-            console.log('[AgentWorkspace] Tool return:', output.slice(0, 100));
-            setStreamingToolResult(output);
-            setStreamingToolCall(null);
+            console.log('[AGENTWORKSPACE] STREAM: ========== TOOL_RETURN RECEIVED ==========');
+            try {
+              let output = (chunk as {output?: string; tool_return?: string; result?: string}).output || (chunk as {output?: string; tool_return?: string; result?: string}).tool_return || (chunk as {output?: string; tool_return?: string; result?: string}).result || '';
+              console.log('[AGENTWORKSPACE] STREAM: output type:', typeof output, 'length:', String(output).length);
+              console.log('[AGENTWORKSPACE] STREAM: First 100 chars:', String(output).slice(0, 100));
+              // Sanitize bash output
+              if (typeof output === 'string') {
+                output = sanitizeToolOutput(output);
+                console.log('[AGENTWORKSPACE] STREAM: After sanitize, length:', output.length);
+              }
+              console.log('[AGENTWORKSPACE] STREAM: Setting streamingToolResult...');
+              setStreamingToolResult(output);
+              console.log('[AGENTWORKSPACE] STREAM: streamingToolResult set');
+              setStreamingToolCall(null);
+            } catch (err) {
+              console.error('[AGENTWORKSPACE] STREAM: CRASH in tool_return handler:', err);
+              setStreamingToolResult('[Error: Unable to display tool output]');
+              setStreamingToolCall(null);
+            }
+            console.log('[AGENTWORKSPACE] STREAM: ========== TOOL_RETURN DONE ==========');
             break;
           }
           case 'error':
@@ -989,10 +1231,56 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
     }
   }, [inputValue, activeConversationId, isStreaming, handleSlashCommand, resetToLatest, shouldAutoScroll, agentId, createConversation, setActiveConversationId, sendEvent]);
 
+  const handleInterrupt = useCallback(async () => {
+    if (!isStreaming || !activeConversationId) return;
+
+    console.log('[AgentWorkspace] Interrupting stream for session:', activeConversationId);
+
+    // Send abort via IPC (Electron path)
+    const isElectron = typeof window !== 'undefined' && window.electron;
+    if (isElectron) {
+      sendEvent({
+        type: "session.stop",
+        payload: { sessionId: activeConversationId },
+      });
+    } else {
+      // Browser mode - use AbortController
+      abortStream();
+    }
+
+    // Immediate UI cleanup
+    setIsInterrupted(true);
+    stopThrottledFlush();
+    completeStream();
+
+    // Auto-clear interrupted flag after brief delay
+    setTimeout(() => setIsInterrupted(false), 500);
+  }, [isStreaming, activeConversationId, sendEvent, abortStream, stopThrottledFlush, completeStream]);
+
   const getModelDisplay = (model: string) => {
     if (!model) return "Unknown";
     return model.split('/').pop()?.split(':')[0] || model;
   };
+
+  // Simple error display for render crashes
+  if (renderError) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center bg-surface-cream p-8">
+        <div className="max-w-lg w-full bg-red-50 border border-red-200 rounded-xl p-6">
+          <h2 className="text-lg font-semibold text-red-800 mb-2">UI Error</h2>
+          <pre className="text-xs text-red-700 whitespace-pre-wrap">{renderError.message}
+
+{renderError.stack}</pre>
+          <button
+            onClick={() => setRenderError(null)}
+            className="mt-4 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+          >
+            Try Again
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (!agent?.loaded) {
     return (
@@ -1015,10 +1303,12 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
     (!toolFilter || t.name.toLowerCase().includes(toolFilter.toLowerCase()))
   );
 
-  return (
-    <div className="h-full flex flex-col bg-surface">
-      {/* Header */}
-      <header className="flex items-center justify-between h-14 px-4 border-b border-ink-900/10 bg-surface shrink-0">
+  // Catch render errors and store them for display
+  try {
+    return (
+      <div className="h-full flex flex-col bg-surface">
+        {/* Header */}
+        <header className="flex items-center justify-between h-14 px-4 border-b border-ink-900/10 bg-surface shrink-0">
         <div className="flex items-center gap-4">
           <button
             onClick={onBack}
@@ -1482,6 +1772,11 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
                   </div>
                 )}
 
+                {latestPermissionRequest && <div style={{background: 'yellow', padding: 10}}>PERMISSION REQUEST EXISTS</div>}
+                {(() => {
+                  // Isolated render for ToolStatusProvider to prevent crashes from propagating
+                  try {
+                    return (
                 <ToolStatusProvider>
                   {visibleMessages.length === 0 && !isLoadingMessages ? (
                     <div className="flex flex-col items-center justify-center py-20 text-center">
@@ -1495,7 +1790,7 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
                         message={item.message}
                         isLast={idx === visibleMessages.length - 1}
                         isRunning={isRunning}
-                        permissionRequest={permissionRequests[0]}
+                        permissionRequest={undefined}
                         onPermissionResult={() => {}}
                         assistantName={nickname || agent.name || 'Assistant'}
                       />
@@ -1514,6 +1809,19 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
                     />
                   )}
                 </ToolStatusProvider>
+                    );
+                  } catch (err) {
+                    if (!messageListCrashError) {
+                      setTimeout(() => setMessageListCrashError(err instanceof Error ? err : new Error(String(err))), 0);
+                    }
+                    return (
+                      <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+                        <h3 className="text-red-700 font-semibold">Message List Error</h3>
+                        <pre className="text-xs text-red-600 mt-2 whitespace-pre-wrap">{err instanceof Error ? err.message : String(err)}</pre>
+                      </div>
+                    );
+                  }
+                })()}
 
                 {/* Streaming reasoning display - limited to prevent UI freeze */}
                 {streamingReasoning && streamingReasoning.length > 0 && (
@@ -1545,24 +1853,25 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
                   </div>
                 )}
 
-                {/* Streaming tool result display - limited to prevent UI freeze on large outputs */}
+                {/* Streaming tool result display - with line-based truncation and error boundary */}
+                {(() => { console.log('[AGENTWORKSPACE] RENDER: Checking streamingToolResult:', { hasResult: !!streamingToolResult, length: streamingToolResult?.length }); return null; })()}
                 {streamingToolResult && streamingToolResult.length > 0 && (
-                  <div className="mt-2 rounded-lg bg-green-50 border border-green-200 overflow-hidden">
+                  <div className="mt-2 rounded-lg bg-green-50 border border-green-200">
+                    {(() => { console.log('[AGENTWORKSPACE] RENDER: Rendering tool result container'); return null; })()}
                     <div className="p-3">
-                      <div className="text-xs text-green-600 mb-1 flex items-center justify-between">
-                        <span>Tool result ({streamingToolResult.length.toLocaleString()} chars)</span>
-                        {streamingToolResult.length > 1000 && (
-                          <button
-                            onClick={() => setShowFullToolResult(!showFullToolResult)}
-                            className="text-green-700 hover:underline text-xs"
-                          >
-                            {showFullToolResult ? 'Show less' : 'Show full output'}
-                          </button>
-                        )}
+                      <div className="text-xs text-green-600 mb-1">
+                        Tool result ({streamingToolResult.length.toLocaleString()} chars
+                        {clippedOutputRef.current.hiddenLines > 0 && !showFullToolResult && (
+                          <span>, {clippedOutputRef.current.totalLines} lines total</span>
+                        )})
                       </div>
-                      <pre className={`text-xs text-ink-600 whitespace-pre-wrap break-all ${showFullToolResult ? 'max-h-[60vh] overflow-y-auto' : 'max-h-48 overflow-hidden'}`}>
-                        {streamingToolResult}
-                      </pre>
+                      {(() => { console.log('[AGENTWORKSPACE] RENDER: About to render SafeToolOutput'); return null; })()}
+                      <SafeToolOutput
+                        output={streamingToolResult}
+                        isExpanded={showFullToolResult}
+                        onToggleExpand={() => setShowFullToolResult(!showFullToolResult)}
+                        onClippedInfo={(info) => { clippedOutputRef.current = info; }}
+                      />
                     </div>
                   </div>
                 )}
@@ -1652,15 +1961,27 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
                     }}
                     disabled={!activeConversationId || isStreaming}
                   />
-                  <button
-                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-white hover:bg-accent-hover transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                    onClick={handleInputSend}
-                    disabled={!activeConversationId || !inputValue.trim() || isStreaming}
-                  >
-                    <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-                      <path d="M3.4 20.6 21 12 3.4 3.4l2.8 7.2L16 12l-9.8 1.4-2.8 7.2Z" fill="currentColor" />
-                    </svg>
-                  </button>
+                  {isStreaming ? (
+                    <button
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-600 text-white hover:bg-red-700 transition-colors animate-pulse"
+                      onClick={handleInterrupt}
+                      title="Stop generating"
+                    >
+                      <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+                        <rect x="6" y="6" width="12" height="12" fill="currentColor" />
+                      </svg>
+                    </button>
+                  ) : (
+                    <button
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-white hover:bg-accent-hover transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                      onClick={handleInputSend}
+                      disabled={!activeConversationId || !inputValue.trim() || isInterrupted}
+                    >
+                      <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+                        <path d="M3.4 20.6 21 12 3.4 3.4l2.8 7.2L16 12l-9.8 1.4-2.8 7.2Z" fill="currentColor" />
+                      </svg>
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -1770,8 +2091,21 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
           </div>
         </div>
       )}
+
     </div>
   );
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    console.error('[AgentWorkspace] RENDER CRASH:', error);
+    // Use setTimeout to avoid setState during render
+    setTimeout(() => setRenderError(error), 0);
+    // Return minimal safe UI while error state updates
+    return (
+      <div className="h-full flex items-center justify-center bg-surface-cream">
+        <div className="text-red-600">UI crashed - see error display</div>
+      </div>
+    );
+  }
 }
 
 // ═══ Config Form Helpers ═══

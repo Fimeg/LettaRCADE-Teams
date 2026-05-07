@@ -4,7 +4,7 @@
  * Uses conversations.messages.create with "default" conversation for agent-direct mode.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { getLettaClient } from "../services/api";
 import type {
   AssistantMessage,
@@ -30,6 +30,8 @@ export interface UseStreamingMessagesReturn {
   isStreaming: boolean;
   /** Error from the most recent streaming request, if any */
   error: Error | null;
+  /** Abort the current streaming request (browser mode only) */
+  abort: () => void;
 }
 
 /**
@@ -45,12 +47,23 @@ export function useStreamingMessages(
 ): UseStreamingMessagesReturn {
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const abort = useCallback(() => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setIsStreaming(false);
+  }, []);
 
   // Actual implementation using async generator pattern
   const sendMessageImpl = useCallback(
     async function* (content: string): AsyncGenerator<StreamChunk, void, unknown> {
       setIsStreaming(true);
       setError(null);
+
+      // Create new AbortController for this request
+      abortControllerRef.current = new AbortController();
+      const signal = abortControllerRef.current.signal;
 
       try {
         const client = getLettaClient();
@@ -74,6 +87,12 @@ export function useStreamingMessages(
 
         let chunkCount = 0;
         for await (const chunk of stream) {
+          // Check if aborted
+          if (signal.aborted) {
+            console.log('[useStreamingMessages] Stream aborted, stopping iteration');
+            return;
+          }
+
           chunkCount++;
           if (chunkCount === 1) console.log(`[useStreamingMessages] First chunk received`);
           const msg = chunk as LettaStreamingResponse;
@@ -162,6 +181,10 @@ export function useStreamingMessages(
           }
         }
       } catch (err) {
+        if ((err as Error).name === 'AbortError') {
+          console.log('[useStreamingMessages] Aborted');
+          return;
+        }
         const error = err instanceof Error ? err : new Error(String(err));
         setError(error);
         yield {
@@ -171,6 +194,7 @@ export function useStreamingMessages(
         };
       } finally {
         setIsStreaming(false);
+        abortControllerRef.current = null;
       }
     },
     [agentId, conversationId]
@@ -183,6 +207,7 @@ export function useStreamingMessages(
     ) => AsyncGenerator<StreamChunk, void, unknown>,
     isStreaming,
     error,
+    abort,
   };
 }
 

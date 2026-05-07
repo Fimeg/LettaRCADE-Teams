@@ -101,6 +101,11 @@ export class SessionManager {
     return false;
   }
 
+  /** Get all pending tool use IDs (for cleanup on abort). */
+  getPendingToolUseIds(): string[] {
+    return Array.from(this.pendingResolvers.keys());
+  }
+
   /** Wrap the extended callback into the SDK's CanUseToolCallback shape,
    *  capturing the current conversation ID at call time. */
   private getWrappedCallback(): CanUseToolCallback | undefined {

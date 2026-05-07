@@ -206,10 +206,11 @@ const ToolCallCard = ({
   const shouldShowDot = toolStatus === "success" || toolStatus === "error" || showIndicator;
 
   useEffect(() => {
-    if (message.toolCallId) {
+    // Only set status if not already being handled by permission flow
+    if (message.toolCallId && !permissionRequest) {
       setToolStatus(message.toolCallId, "pending");
     }
-  }, [message.toolCallId, setToolStatus]);
+  }, [message.toolCallId, setToolStatus, permissionRequest]);
 
   const getToolInfo = (): string | null => {
     const input = message.toolInput;

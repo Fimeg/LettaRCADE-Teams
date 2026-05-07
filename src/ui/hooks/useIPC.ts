@@ -16,8 +16,30 @@ export function useIPC(onEvent: (event: ServerEvent) => void) {
       // the callback identity changes (e.g. activeConversationId flips).
       // Without this, a permission.request broadcast during the tear-down /
       // re-setup gap is silently lost, stalling the canUseTool Promise.
+      console.log('[useIPC] Setting up Electron IPC listener');
       const unsubscribe = window.electron.onServerEvent((event: ServerEvent) => {
-        onEventRef.current(event);
+        console.log('[useIPC] ========== EVENT RECEIVED ==========');
+        console.log('[useIPC] Event type:', event.type);
+        try {
+          const safeEvent = JSON.stringify(
+            event,
+            (_key, value) => {
+              if (typeof value === "bigint") return value.toString();
+              return value;
+            },
+            2
+          );
+          console.log('[useIPC] Full event:', safeEvent.slice(0, 2000));
+        } catch (err) {
+          console.warn('[useIPC] Failed to stringify event for logging:', err);
+        }
+        console.log('[useIPC] About to call onEvent handler...');
+        try {
+          onEventRef.current(event);
+        } catch (err) {
+          console.error('[useIPC] onEvent handler crashed:', err);
+        }
+        console.log('[useIPC] ========== EVENT HANDLED ==========');
       });
 
       setConnected(true);
