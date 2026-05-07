@@ -597,6 +597,20 @@ export interface UpdateProviderPayload {
   region?: string;
 }
 
+// FastAPI surfaces error context as `detail` (string or {message}). Pull it
+// out so callers see "duplicate provider name" instead of "Server returned 409".
+async function readServerError(response: Response): Promise<string> {
+  try {
+    const body = await response.json();
+    if (typeof body?.detail === 'string') return body.detail;
+    if (typeof body?.detail?.message === 'string') return body.detail.message;
+    if (typeof body?.message === 'string') return body.message;
+  } catch {
+    // fall through
+  }
+  return `Server returned ${response.status}`;
+}
+
 /**
  * Provider API client using raw fetch (not wrapped in SDK yet).
  * The /v1/providers/ endpoints exist on OSS 16.7+ but aren't in the official SDK.
@@ -619,7 +633,7 @@ export const providersApi = {
       });
 
       if (!response.ok) {
-        throw new Error(`Server returned ${response.status}`);
+        throw new Error(await readServerError(response));
       }
 
       return await response.json() as Provider[];
@@ -646,7 +660,7 @@ export const providersApi = {
       });
 
       if (!response.ok) {
-        throw new Error(`Server returned ${response.status}`);
+        throw new Error(await readServerError(response));
       }
 
       return await response.json() as Provider;
@@ -676,7 +690,7 @@ export const providersApi = {
       });
 
       if (!response.ok) {
-        throw new Error(`Server returned ${response.status}`);
+        throw new Error(await readServerError(response));
       }
 
       return await response.json() as Provider;
@@ -706,7 +720,7 @@ export const providersApi = {
       });
 
       if (!response.ok) {
-        throw new Error(`Server returned ${response.status}`);
+        throw new Error(await readServerError(response));
       }
 
       return await response.json() as Provider;
@@ -733,7 +747,7 @@ export const providersApi = {
       });
 
       if (!response.ok && response.status !== 204) {
-        throw new Error(`Server returned ${response.status}`);
+        throw new Error(await readServerError(response));
       }
     } catch (err) {
       console.error(`[providersApi] Failed to delete provider ${providerId}:`, err);
@@ -767,8 +781,7 @@ export const providersApi = {
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: `Server returned ${response.status}` }));
-        throw new Error(errorData.message || `Server returned ${response.status}`);
+        throw new Error(await readServerError(response));
       }
     } catch (err) {
       console.error('[providersApi] Provider check failed:', err);

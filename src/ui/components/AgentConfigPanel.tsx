@@ -2,6 +2,7 @@ import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { listLLMModels, type LLMModelOption } from '../services/api';
 import * as Popover from '@radix-ui/react-popover';
+import { ChevronDown, Check } from 'lucide-react';
 
 interface ToolAttachment {
   id: string;
@@ -217,6 +218,12 @@ function SettingsTab({ agentId, agent, llmConfig, contextWindow, modelSettings }
   const updateAgent = useAppStore((s) => s.updateAgent);
   const searchRef = useRef<HTMLInputElement>(null);
 
+  // Find the currently selected model in the loaded list
+  const currentModel = useMemo(
+    () => models.find((m) => m.id === agent.model),
+    [models, agent.model],
+  );
+
   const filtered = useMemo(() => {
     if (!search) return models;
     const q = search.toLowerCase();
@@ -225,13 +232,17 @@ function SettingsTab({ agentId, agent, llmConfig, contextWindow, modelSettings }
     );
   }, [models, search]);
 
+  // Pre-fetch models on mount so the trigger has data ready
   useEffect(() => {
-    if (!open) return;
-    setSearch('');
     setModelsLoading(true);
     listLLMModels().then(setModels).catch((err) => {
       console.error('[ModelPicker] Failed to load models:', err);
     }).finally(() => setModelsLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    setSearch('');
     // Focus search after popover opens
     requestAnimationFrame(() => searchRef.current?.focus());
   }, [open]);
@@ -274,12 +285,30 @@ function SettingsTab({ agentId, agent, llmConfig, contextWindow, modelSettings }
     <div className="space-y-4">
       <h3 className="text-sm font-semibold text-ink-900 mb-4">Model Configuration</h3>
 
-      {/* Model Name — now a clickable popover trigger */}
+      {/* Model Picker — clickable trigger with current model details */}
       <ConfigCard label="Model">
         <Popover.Root open={open} onOpenChange={setOpen}>
           <Popover.Trigger asChild>
-            <button className="w-full text-left text-ink-900 font-medium text-sm break-all hover:text-accent transition-colors cursor-pointer">
-              {agent.model || 'Not set'}
+            <button className="w-full text-left hover:text-accent transition-colors cursor-pointer group">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-medium text-ink-900 text-sm truncate">
+                  {currentModel?.name || agent.model?.split('/').pop() || 'Not set'}
+                </span>
+                <ChevronDown className="w-4 h-4 text-ink-400 shrink-0 group-hover:text-accent transition-colors" />
+              </div>
+              <div className="flex items-center gap-2 mt-1">
+                <span className="text-xs font-mono text-ink-500">
+                  {currentModel?.provider || agent.model?.split('/')[0] || ''}
+                </span>
+                {(currentModel?.contextWindow || contextWindow) && (
+                  <>
+                    <span className="text-ink-300">·</span>
+                    <span className="text-xs text-ink-500">
+                      {Math.round((currentModel?.contextWindow || contextWindow || 0) / 1000)}k context
+                    </span>
+                  </>
+                )}
+              </div>
             </button>
           </Popover.Trigger>
           <Popover.Portal>
@@ -312,17 +341,22 @@ function SettingsTab({ agentId, agent, llmConfig, contextWindow, modelSettings }
                     <button
                       key={m.id}
                       onClick={() => handleSelect(m.id)}
-                      className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors hover:bg-accent/10 ${
-                        m.id === agent.model ? 'bg-accent/10 text-accent' : 'text-ink-900'
+                      className={`w-full flex items-center justify-between gap-3 px-3 py-1.5 text-sm transition-colors hover:bg-accent/5 ${
+                        m.id === agent.model ? 'text-accent font-medium' : 'text-ink-900'
                       }`}
                     >
-                      <div className="font-medium truncate">{m.name}</div>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-xs text-ink-500">{m.provider}</span>
+                      <span className="truncate min-w-0">{m.name}</span>
+                      <span className="flex items-center gap-2 shrink-0">
+                        <span className="text-[11px] text-ink-400 font-mono">{m.provider}</span>
                         {m.contextWindow && (
-                          <span className="text-xs text-ink-400">{m.contextWindow.toLocaleString()} ctx</span>
+                          <span className="text-[11px] text-ink-400 tabular-nums">
+                            {Math.round(m.contextWindow / 1000)}k
+                          </span>
                         )}
-                      </div>
+                        {m.id === agent.model && (
+                          <Check className="w-3.5 h-3.5 text-accent" />
+                        )}
+                      </span>
                     </button>
                   ))
                 )}
@@ -347,13 +381,6 @@ function SettingsTab({ agentId, agent, llmConfig, contextWindow, modelSettings }
           </div>
         )}
       </ConfigCard>
-
-      {/* Context Window */}
-      {contextWindow && (
-        <ConfigCard label="Context Window">
-          <p className="text-ink-900 text-sm">{contextWindow.toLocaleString()} tokens</p>
-        </ConfigCard>
-      )}
 
       {/* Max Tokens (if available) */}
       {maxTokens && (

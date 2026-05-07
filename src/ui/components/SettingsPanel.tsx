@@ -73,7 +73,6 @@ import {
 type SettingsSection =
   | 'connection'
   | 'providers'
-  | 'models'
   | 'integrations'
   | 'preferences'
   | 'advanced'
@@ -498,7 +497,16 @@ interface ProviderFormData {
   provider_type: ProviderType;
   api_key: string;
   base_url: string;
+  access_key: string;
+  region: string;
 }
+
+// Provider types whose schema requires AWS-style credentials beyond api_key.
+// Bedrock: api_key=secret_access_key, access_key=AWS access key id, region=AWS region.
+// Vertex: region carries the GCP cloud location (full project support is missing
+// upstream — file an issue if Vertex CRUD is needed).
+const NEEDS_AWS_CREDS: ProviderType[] = ['bedrock'];
+const NEEDS_REGION: ProviderType[] = ['bedrock', 'google_vertex'];
 
 function ProviderModal({
   isOpen,
@@ -524,6 +532,8 @@ function ProviderModal({
     provider_type: 'anthropic',
     api_key: '',
     base_url: '',
+    access_key: '',
+    region: '',
   });
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<Partial<Record<keyof ProviderFormData, string>>>({});
@@ -535,6 +545,8 @@ function ProviderModal({
         provider_type: provider.provider_type,
         api_key: '', // Don't show existing key
         base_url: provider.base_url || '',
+        access_key: '', // Don't show existing access key
+        region: provider.region || '',
       });
     } else {
       setFormData({
@@ -542,6 +554,8 @@ function ProviderModal({
         provider_type: 'anthropic',
         api_key: '',
         base_url: '',
+        access_key: '',
+        region: '',
       });
     }
     setErrors({});
@@ -551,12 +565,20 @@ function ProviderModal({
 
   const selectedType = PROVIDER_TYPES.find((t) => t.value === formData.provider_type);
   const needsBaseUrl = selectedType?.needsBaseUrl ?? false;
+  const needsAwsCreds = NEEDS_AWS_CREDS.includes(formData.provider_type);
+  const needsRegion = NEEDS_REGION.includes(formData.provider_type);
 
   const validate = (): boolean => {
     const newErrors: Partial<Record<keyof ProviderFormData, string>> = {};
     if (!formData.name.trim()) newErrors.name = 'Provider name is required';
     if (mode === 'create' && !formData.api_key.trim()) newErrors.api_key = 'API key is required for new providers';
     if (needsBaseUrl && !formData.base_url.trim()) newErrors.base_url = 'Base URL is required for this provider type';
+    if (mode === 'create' && needsAwsCreds && !formData.access_key.trim()) {
+      newErrors.access_key = 'AWS access key ID is required';
+    }
+    if (needsRegion && !formData.region.trim()) {
+      newErrors.region = 'Region is required for this provider type';
+    }
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -584,7 +606,7 @@ function ProviderModal({
     <Modal open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <ModalContent className="max-w-lg">
         <ModalHeader>
-          <ModalTitle>{mode === 'create' ? 'Add' : 'Edit'}</ModalTitle>
+          <ModalTitle>{mode === 'create' ? 'Add Provider' : 'Edit Provider'}</ModalTitle>
           <ModalDescription>
             {mode === 'create'
               ? 'Configure a new AI model provider'
@@ -652,20 +674,58 @@ function ProviderModal({
           )}
 
           <FormField
-            label={`API Key ${mode === 'edit' ? '(leave blank to keep current)' : ''}`}
+            label={`${needsAwsCreds ? 'AWS Secret Access Key' : 'API Key'} ${mode === 'edit' ? '(leave blank to keep current)' : ''}`}
             error={errors.api_key}
-            helperText="Your key is encrypted server-side and never stored locally in plaintext"
+            helperText={needsAwsCreds
+              ? 'Stored as the AWS secret access key. Encrypted server-side.'
+              : 'Your key is encrypted server-side and never stored locally in plaintext'}
           >
             <Input
               type="password"
               value={formData.api_key}
               onChange={(e) => setFormData({ ...formData, api_key: e.target.value })}
-              placeholder={mode === 'edit' ? '••••••••' : 'sk-...'}
+              placeholder={mode === 'edit' ? '••••••••' : (needsAwsCreds ? 'AWS secret access key' : 'sk-...')}
               size="sm"
               className="font-mono"
               required={mode === 'create'}
             />
           </FormField>
+
+          {needsAwsCreds && (
+            <FormField
+              label={`AWS Access Key ID ${mode === 'edit' ? '(leave blank to keep current)' : ''}`}
+              error={errors.access_key}
+              helperText="The non-secret AWS access key id (e.g. AKIA…)"
+            >
+              <Input
+                type="text"
+                value={formData.access_key}
+                onChange={(e) => setFormData({ ...formData, access_key: e.target.value })}
+                placeholder={mode === 'edit' ? '••••••••' : 'AKIA...'}
+                size="sm"
+                className="font-mono"
+              />
+            </FormField>
+          )}
+
+          {needsRegion && (
+            <FormField
+              label="Region"
+              error={errors.region}
+              helperText={formData.provider_type === 'google_vertex'
+                ? 'GCP cloud location, e.g. us-central1'
+                : 'AWS region, e.g. us-east-1'}
+            >
+              <Input
+                type="text"
+                value={formData.region}
+                onChange={(e) => setFormData({ ...formData, region: e.target.value })}
+                placeholder={formData.provider_type === 'google_vertex' ? 'us-central1' : 'us-east-1'}
+                size="sm"
+                className="font-mono"
+              />
+            </FormField>
+          )}
 
           {testResult && (
             <Alert variant={testResult.success ? 'success' : 'error'} className="mt-4">
@@ -786,8 +846,13 @@ function ProvidersSection() {
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isTesting, setIsTesting] = useState(false);
 
-  const baseProviders = useMemo(() => providers.filter((p) => p.provider_category === 'base'), [providers]);
-  const byokProviders = useMemo(() => providers.filter((p) => p.provider_category === 'byok'), [providers]);
+  // Letta server's GET /v1/providers/ only returns BYOK providers (base providers
+  // live on the server but aren't surfaced via the list endpoint), so any "base"
+  // bucket here would always be empty — keep the BYOK split explicit.
+  const byokProviders = useMemo(
+    () => providers.filter((p) => p.provider_category === 'byok' || !p.provider_category),
+    [providers],
+  );
 
   // All models flattened for search
   const allModels = useMemo(() => {
@@ -842,7 +907,8 @@ function ProvidersSection() {
         return next;
       });
 
-      // Load models if not already loaded
+      // Models are prefetched in loadProviders, but cover the case where the
+      // initial prefetch failed for this provider — retry on first expand.
       if (!models.has(providerId) && !loadingModels.has(providerId)) {
         const provider = providers.find((p) => p.id === providerId);
         if (!provider) return;
@@ -878,6 +944,23 @@ function ProvidersSection() {
       }
       const data = await providersApi.listProviders();
       setProviders(data);
+
+      // Prefetch models per provider in parallel so count badges, search, and
+      // favorites all populate without forcing the user to expand each card.
+      // Per-provider failures are swallowed so one bad provider doesn't blank
+      // the rest.
+      const prefetched = await Promise.all(
+        data.map(async (p) => {
+          try {
+            const m = await fetchModelsForProvider(p.name);
+            return [p.id, m] as const;
+          } catch (err) {
+            console.warn(`[ProvidersSection] Prefetch failed for ${p.name}:`, err);
+            return [p.id, [] as Model[]] as const;
+          }
+        }),
+      );
+      setModels(new Map(prefetched));
     } catch (err) {
       console.error('[ProvidersSection] Failed to load providers:', err);
       setError(err instanceof Error ? err.message : 'Failed to load providers');
@@ -907,11 +990,12 @@ function ProvidersSection() {
     setIsTesting(true);
     setTestResult(null);
     try {
-      // Validate the provider API key before creating
       await providersApi.checkProvider(
         formData.provider_type,
         formData.api_key,
-        formData.base_url || undefined
+        formData.base_url || undefined,
+        formData.access_key || undefined,
+        formData.region || undefined,
       );
       setTestResult({ success: true, message: 'API key is valid!' });
     } catch (err) {
@@ -930,6 +1014,8 @@ function ProvidersSection() {
       provider_type: formData.provider_type,
       api_key: formData.api_key,
       base_url: formData.base_url || undefined,
+      access_key: formData.access_key || undefined,
+      region: formData.region || undefined,
     };
     const newProvider = await providersApi.createProvider(payload);
     setProviders((prev) => [...prev, newProvider]);
@@ -941,7 +1027,9 @@ function ProvidersSection() {
     const payload: UpdateProviderPayload = {
       name: formData.name,
       ...(formData.api_key.trim() && { api_key: formData.api_key }),
+      ...(formData.access_key.trim() && { access_key: formData.access_key }),
       base_url: formData.base_url || undefined,
+      region: formData.region || undefined,
     };
     const updated = await providersApi.updateProvider(editingProvider.id, payload);
     setProviders((prev) => prev.map((p) => (p.id === editingProvider.id ? updated : p)));
@@ -1274,15 +1362,6 @@ function ProvidersSection() {
             <SubSection title={`BYOK Providers (${byokProviders.length})`}>
               <div className="grid gap-3">
                 {byokProviders.map((p) => renderProviderCard(p, false))}
-              </div>
-            </SubSection>
-          )}
-
-          {/* Base Providers */}
-          {baseProviders.length > 0 && !searchQuery && (
-            <SubSection title={`Base Providers (${baseProviders.length})`}>
-              <div className="grid gap-3">
-                {baseProviders.map((p) => renderProviderCard(p, true))}
               </div>
             </SubSection>
           )}
