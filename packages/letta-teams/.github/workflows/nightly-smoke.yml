@@ -1,0 +1,40 @@
+name: Nightly Smoke
+
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: Build + Pack Smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Pack
+        run: npm pack
+
+      - name: Install package globally
+        run: npm install -g ./letta-teams-*.tgz
+
+      - name: Smoke test --help
+        run: letta-teams --help
+
+      - name: Smoke test --version
+        run: letta-teams --version
