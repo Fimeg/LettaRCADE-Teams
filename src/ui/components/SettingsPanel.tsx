@@ -275,26 +275,41 @@ function ConnectionSection() {
     try {
       const baseURL = getApiBase();
       const key = getApiKey();
+      const fullUrl = `${baseURL.replace(/\/$/, '')}/v1/agents/`;
 
-      // Use Electron IPC health check if available (has better error details)
-      // Falls back to browser fetch for web builds
-      let result: { healthy: boolean; status?: number; error?: string; errorType?: string };
+      // Try both methods and see which works
+      let result: { healthy: boolean; status?: number; error?: string; errorType?: string; method?: string };
 
-      if (typeof window !== 'undefined' && window.electron?.letta?.healthCheck) {
-        console.log('[SettingsPanel.handleTest] Using Electron IPC health check');
-        result = await window.electron.letta.healthCheck(baseURL, key);
-      } else {
-        console.log('[SettingsPanel.handleTest] Using browser fetch (limited diagnostics)');
-        const fullUrl = `${baseURL.replace(/\/$/, '')}/v1/agents/`;
+      // Method 1: Try Electron IPC first (better diagnostics)
+      const hasElectronIPC = typeof window !== 'undefined' && !!window.electron?.letta?.healthCheck;
+      console.log('[SettingsPanel.handleTest] Electron IPC available:', hasElectronIPC);
+
+      if (hasElectronIPC) {
+        try {
+          console.log('[SettingsPanel.handleTest] Trying IPC health check...');
+          const ipcResult = await window.electron.letta.healthCheck(baseURL, key);
+          console.log('[SettingsPanel.handleTest] IPC result:', ipcResult);
+          result = { ...ipcResult, method: 'ipc' };
+        } catch (ipcErr) {
+          console.error('[SettingsPanel.handleTest] IPC failed:', ipcErr);
+          // Fall through to browser fetch
+        }
+      }
+
+      // Method 2: Browser fetch (fallback or if IPC not available)
+      if (!result) {
+        console.log('[SettingsPanel.handleTest] Trying browser fetch...');
         try {
           const response = await fetch(fullUrl, {
             method: 'GET',
             headers: key ? { Authorization: `Bearer ${key}` } : {},
           });
-          result = { healthy: response.ok, status: response.status };
+          console.log('[SettingsPanel.handleTest] Fetch result:', response.status, response.ok);
+          result = { healthy: response.ok, status: response.status, method: 'fetch' };
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'Failed to fetch';
-          result = { healthy: false, error: msg, errorType: 'network-error' };
+          console.log('[SettingsPanel.handleTest] Fetch failed:', msg);
+          result = { healthy: false, error: msg, errorType: 'network-error', method: 'fetch' };
         }
       }
 
