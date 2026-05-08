@@ -268,8 +268,12 @@ function ConnectionSection() {
     try {
       const baseURL = getApiBase();
       const key = getApiKey();
+      const fullUrl = `${baseURL.replace(/\/$/, '')}/v1/agents/`;
 
-      const response = await fetch(`${baseURL.replace(/\/$/, '')}/v1/agents/`, {
+      console.log('[SettingsPanel.handleTest] Testing:', fullUrl);
+      console.log('[SettingsPanel.handleTest] Auth:', key ? 'Bearer ***' : 'none');
+
+      const response = await fetch(fullUrl, {
         method: 'GET',
         headers: key ? { Authorization: `Bearer ${key}` } : {},
       });
@@ -277,16 +281,39 @@ function ConnectionSection() {
       if (response.ok) {
         setServerConnected(true);
         setTestResult({ success: true, message: `Connected to ${baseURL}` });
+        console.log('[SettingsPanel.handleTest] Success:', response.status);
       } else {
         setServerConnected(false);
-        setTestResult({ success: false, message: `Server returned ${response.status}` });
+        // Try to get response body
+        let body = '';
+        try { body = await response.text(); } catch { /* ignore */ }
+        console.log('[SettingsPanel.handleTest] Failed:', response.status, body.slice(0, 200));
+        setTestResult({ success: false, message: `Server returned ${response.status}: ${body.slice(0, 100)}` });
       }
     } catch (err) {
       setServerConnected(false);
-      setTestResult({
-        success: false,
-        message: err instanceof Error ? err.message : 'Connection failed',
-      });
+      const errorMsg = err instanceof Error ? err.message : 'Connection failed';
+
+      // Classify error for better UX
+      const errorType =
+        errorMsg.includes('ECONNREFUSED') || errorMsg.includes('Failed to fetch') ? 'connection-refused' :
+        errorMsg.includes('ENOTFOUND') || errorMsg.includes('getaddrinfo') ? 'dns-failed' :
+        errorMsg.includes('ETIMEDOUT') ? 'timeout' :
+        'unknown';
+
+      console.log('[SettingsPanel.handleTest] Error:', errorType, errorMsg);
+
+      // User-friendly error message
+      let userMessage = errorMsg;
+      if (errorType === 'connection-refused') {
+        userMessage = `Connection refused. Is the server running at ${getApiBase()}?`;
+      } else if (errorType === 'dns-failed') {
+        userMessage = `DNS lookup failed. Check the server URL.`;
+      } else if (errorType === 'timeout') {
+        userMessage = `Connection timed out. Server may be unreachable.`;
+      }
+
+      setTestResult({ success: false, message: userMessage });
     }
   };
 

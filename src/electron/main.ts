@@ -557,26 +557,43 @@ app.on("ready", async () => {
     // Health check for 3-mode architecture — verifies server connectivity
     // before attempting Local mode spawn or when switching modes
     ipcMainHandle("letta:health-check", async (_event, url: string, apiKey?: string) => {
-        console.log("[ipc:letta:health-check] Checking health for:", url);
+        const fullUrl = `${url.replace(/\/$/, "")}/v1/agents/?limit=1`;
+        console.log("[ipc:letta:health-check] Checking health for:", fullUrl);
+        console.log("[ipc:letta:health-check] Headers:", apiKey ? { Authorization: "Bearer ***" } : "(none)");
+
         try {
             const headers: Record<string, string> = {};
             if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
 
-            const response = await fetch(`${url.replace(/\/$/, "")}/v1/agents/?limit=1`, {
+            const response = await fetch(fullUrl, {
                 method: "GET",
                 headers,
             });
 
             if (response.ok) {
-                console.log("[ipc:letta:health-check] Healthy:", url);
-                return { healthy: true };
+                console.log("[ipc:letta:health-check] Healthy:", url, "Status:", response.status);
+                return { healthy: true, status: response.status };
             }
-            console.log("[ipc:letta:health-check] Unhealthy:", response.status);
-            return { healthy: false, error: `Server returned ${response.status}` };
+
+            // Try to get response body for more details
+            let body = "";
+            try {
+                body = await response.text();
+            } catch { /* ignore */ }
+
+            console.log("[ipc:letta:health-check] Unhealthy:", response.status, "Body:", body.slice(0, 200));
+            return { healthy: false, error: `Server returned ${response.status}`, status: response.status, body: body.slice(0, 500) };
         } catch (err) {
             const errorMsg = err instanceof Error ? err.message : String(err);
-            console.log("[ipc:letta:health-check] Error:", errorMsg);
-            return { healthy: false, error: errorMsg };
+            const errorType =
+                errorMsg.includes("ECONNREFUSED") ? "connection-refused" :
+                errorMsg.includes("ENOTFOUND") || errorMsg.includes("getaddrinfo") ? "dns-failed" :
+                errorMsg.includes("ETIMEDOUT") ? "timeout" :
+                errorMsg.includes("self-signed") || errorMsg.includes("certificate") ? "ssl-error" :
+                "unknown";
+
+            console.log("[ipc:letta:health-check] Error:", errorType, errorMsg);
+            return { healthy: false, error: errorMsg, errorType, url: fullUrl };
         }
     });
 })

@@ -523,26 +523,56 @@ export const systemApi = {
     connected: boolean;
     version?: string;
     error?: string;
+    errorType?: string;
+    status?: number;
   }> => {
     const baseURL = getApiBase();
     const apiKey = getApiKey();
     const headers: Record<string, string> = {};
     if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
+    const fullUrl = `${baseURL.replace(/\/$/, '')}/v1/agents/`;
+    console.log('[systemApi.checkServerHealth] Checking:', fullUrl);
+    console.log('[systemApi.checkServerHealth] Headers:', apiKey ? 'Bearer ***' : '(none)');
+
     try {
-      const response = await fetch(`${baseURL.replace(/\/$/, '')}/v1/agents/`, {
+      const response = await fetch(fullUrl, {
         method: 'GET',
         headers,
       });
 
       if (response.ok || response.status === 200) {
-        return { connected: true };
+        console.log('[systemApi.checkServerHealth] Connected:', response.status);
+        return { connected: true, status: response.status };
       }
-      return { connected: false, error: `Server returned ${response.status}` };
-    } catch (err) {
+
+      // Try to get response body for more details
+      let body = '';
+      try {
+        body = await response.text();
+      } catch { /* ignore */ }
+
+      console.log('[systemApi.checkServerHealth] Failed:', response.status, body.slice(0, 200));
       return {
         connected: false,
-        error: err instanceof Error ? err.message : 'Connection failed',
+        error: `Server returned ${response.status}`,
+        status: response.status,
+      };
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Connection failed';
+      const errorType =
+        errorMsg.includes('ECONNREFUSED') || errorMsg.includes('Failed to fetch') && errorMsg.includes('reject') ? 'connection-refused' :
+        errorMsg.includes('ENOTFOUND') || errorMsg.includes('getaddrinfo') || errorMsg.includes('Failed to fetch') && errorMsg.includes('resolve') ? 'dns-failed' :
+        errorMsg.includes('ETIMEDOUT') || errorMsg.includes('timeout') ? 'timeout' :
+        errorMsg.includes('Failed to fetch') && errorMsg.includes('CORS') ? 'cors-error' :
+        errorMsg.includes('Failed to fetch') ? 'network-error' :
+        'unknown';
+
+      console.log('[systemApi.checkServerHealth] Error:', errorType, errorMsg);
+      return {
+        connected: false,
+        error: errorMsg,
+        errorType,
       };
     }
   },
