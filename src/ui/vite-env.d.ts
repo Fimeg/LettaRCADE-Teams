@@ -55,9 +55,57 @@ declare global {
       };
       /** 3-mode connection health check */
       letta: {
-        healthCheck: (url: string, apiKey?: string) => Promise<{ healthy: boolean; error?: string }>;
+        healthCheck: (url: string, apiKey?: string) => Promise<{
+          healthy: boolean;
+          status?: number;
+          error?: string;
+          errorType?: 'connection-refused' | 'dns-failed' | 'timeout' | 'ssl-error' | 'cors-error' | 'network-error' | 'unknown';
+          url?: string;
+          body?: string;
+        }>;
       };
     };
+  }
+
+  /** IPC event payload type mapping for type-safe invoke/handle */
+  interface EventPayloadMapping {
+    'getStaticData': { platform: string; arch: string; cpuModel: string };
+    'get-config': any;
+    'save-config': any;
+    'get-runtime-env': any;
+    'get-recent-cwds': string[];
+    'select-directory': string | null;
+    'operator-profile:get': { displayName?: string; memfsGitUrlTemplate?: string } | null;
+    'operator-profile:save': void;
+    'letta-code:get-status': any;
+    'letta-code:spawn': { ok: boolean; error?: string };
+    'letta-code:stop': { ok: boolean; error?: string };
+    'letta:health-check': {
+      healthy: boolean;
+      status?: number;
+      error?: string;
+      errorType?: 'connection-refused' | 'dns-failed' | 'timeout' | 'ssl-error' | 'cors-error' | 'network-error' | 'unknown';
+      url?: string;
+      body?: string;
+    };
+    'teams:agent-teammate-map': Record<string, string>;
+    'teams:daemon:get-status': any;
+    'teams:daemon:ensure-running': any;
+    'teams:teammates:list': any[];
+    'teams:teammates:get': any;
+    'teams:teammates:spawn': any;
+    'teams:teammates:fork': any;
+    'teams:teammates:reinit': string;
+    'teams:tasks:list': any[];
+    'teams:tasks:get': any;
+    'teams:tasks:dispatch': { taskId: string };
+    'teams:tasks:wait': any;
+    'teams:tasks:cancel': any;
+    'teams:councils:start': any;
+    'teams:councils:list': any[];
+    'teams:councils:get': any;
+    'teams:configure': any;
+    'statistics': { cpuUsage: number; ramUsage: number; storageData: number };
   }
 }
 

@@ -56,3 +56,13 @@ export type ClientEvent =
   | { type: "session.list" }
   | { type: "session.history"; payload: { sessionId: string } }
   | { type: "permission.response"; payload: { sessionId: string; toolUseId: string; result: CanUseToolResponse } };
+
+// Health check return type
+export type HealthCheckResult = {
+  healthy: boolean;
+  status?: number;
+  error?: string;
+  errorType?: 'connection-refused' | 'dns-failed' | 'timeout' | 'ssl-error' | 'cors-error' | 'network-error' | 'unknown';
+  url?: string;
+  body?: string;
+};

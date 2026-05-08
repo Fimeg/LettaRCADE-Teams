@@ -275,79 +275,92 @@ function ConnectionSection() {
     try {
       const baseURL = getApiBase();
       const key = getApiKey();
-      const fullUrl = `${baseURL.replace(/\/$/, '')}/v1/agents/`;
 
-      console.log('[SettingsPanel.handleTest] Testing:', fullUrl);
-      console.log('[SettingsPanel.handleTest] Auth:', key ? 'Bearer ***' : 'none');
+      // Use Electron IPC health check if available (has better error details)
+      // Falls back to browser fetch for web builds
+      let result: { healthy: boolean; status?: number; error?: string; errorType?: string };
 
-      const response = await fetch(fullUrl, {
-        method: 'GET',
-        headers: key ? { Authorization: `Bearer ${key}` } : {},
-      });
+      if (typeof window !== 'undefined' && window.electron?.letta?.healthCheck) {
+        console.log('[SettingsPanel.handleTest] Using Electron IPC health check');
+        result = await window.electron.letta.healthCheck(baseURL, key);
+      } else {
+        console.log('[SettingsPanel.handleTest] Using browser fetch (limited diagnostics)');
+        const fullUrl = `${baseURL.replace(/\/$/, '')}/v1/agents/`;
+        try {
+          const response = await fetch(fullUrl, {
+            method: 'GET',
+            headers: key ? { Authorization: `Bearer ${key}` } : {},
+          });
+          result = { healthy: response.ok, status: response.status };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Failed to fetch';
+          result = { healthy: false, error: msg, errorType: 'network-error' };
+        }
+      }
 
-      if (response.ok) {
+      if (result.healthy) {
         setServerConnected(true);
-        setTestResult({ success: true, message: `Connected to ${baseURL}`, status: response.status });
-        console.log('[SettingsPanel.handleTest] Success:', response.status);
+        setTestResult({
+          success: true,
+          message: `Connected to ${baseURL}`,
+          status: result.status,
+        });
+        console.log('[SettingsPanel.handleTest] Success:', result.status);
       } else {
         setServerConnected(false);
-        // Try to get response body
-        let body = '';
-        try { body = await response.text(); } catch { /* ignore */ }
-        console.log('[SettingsPanel.handleTest] Failed:', response.status, body.slice(0, 200));
+        console.log('[SettingsPanel.handleTest] Failed:', result.errorType, result.error, result.status);
 
-        // Get hint based on status
+        // Get hint based on error type or status
         let hint = '';
-        if (response.status === 401) hint = 'Authentication failed. Check your API key.';
-        else if (response.status === 403) hint = 'Access denied. Check your permissions.';
-        else if (response.status === 404) hint = 'Server endpoint not found. Is this a Letta server?';
-        else if (response.status >= 500) hint = 'Server error. Check the server logs.';
+        let message = result.error || 'Connection failed';
+
+        if (result.status === 401) {
+          hint = 'Authentication failed. Check your API key.';
+          message = `Server returned ${result.status}: Authentication failed`;
+        } else if (result.status === 403) {
+          hint = 'Access denied. Check your permissions.';
+          message = `Server returned ${result.status}: Access denied`;
+        } else if (result.status === 404) {
+          hint = 'Server endpoint not found. Is this a Letta server?';
+          message = `Server returned ${result.status}: Not found`;
+        } else if (result.status && result.status >= 500) {
+          hint = 'Server error. Check the server logs.';
+          message = `Server returned ${result.status}: Server error`;
+        } else if (result.errorType === 'connection-refused') {
+          message = 'Connection refused';
+          hint = `Is the Letta server running at ${baseURL}? Check that the server is started and the URL/port are correct.`;
+        } else if (result.errorType === 'dns-failed') {
+          message = 'DNS lookup failed';
+          hint = `Cannot resolve hostname. Check the server URL: ${baseURL}`;
+        } else if (result.errorType === 'timeout') {
+          message = 'Connection timed out';
+          hint = 'The server is not responding. It may be unreachable or behind a firewall.';
+        } else if (result.errorType === 'ssl-error') {
+          message = 'SSL/TLS error';
+          hint = 'Certificate error. If using self-signed certs, the app should allow them. Check the server certificate.';
+        } else if (result.errorType === 'network-error' || result.errorType === 'unknown') {
+          message = result.error || 'Network error';
+          hint = `Failed to connect to ${baseURL}. Common causes:\n• Server not running\n• Wrong URL or port\n• Firewall blocking connection\n• Server requires password (Basic Auth) or API key\n• CORS restrictions (if in browser)`;
+        }
 
         setTestResult({
           success: false,
-          message: `Server returned ${response.status}`,
-          status: response.status,
-          url: fullUrl,
+          message,
+          status: result.status,
+          errorType: result.errorType,
+          url: baseURL,
           hint,
         });
       }
     } catch (err) {
       setServerConnected(false);
       const errorMsg = err instanceof Error ? err.message : 'Connection failed';
-
-      // Classify error for better UX
-      const errorType =
-        errorMsg.includes('ECONNREFUSED') ? 'connection-refused' :
-        errorMsg.includes('Failed to fetch') && errorMsg.includes('fetch') ? 'network-error' :
-        errorMsg.includes('ENOTFOUND') || errorMsg.includes('getaddrinfo') ? 'dns-failed' :
-        errorMsg.includes('ETIMEDOUT') ? 'timeout' :
-        errorMsg.includes('CORS') ? 'cors-error' :
-        'unknown';
-
-      console.log('[SettingsPanel.handleTest] Error:', errorType, errorMsg);
-
-      // User-friendly error message with troubleshooting hints
-      let userMessage = errorMsg;
-      let hint = '';
-
-      if (errorType === 'connection-refused') {
-        userMessage = 'Connection refused';
-        hint = `Is the Letta server running at ${getApiBase()}? Check that the server is started and the URL is correct.`;
-      } else if (errorType === 'dns-failed') {
-        userMessage = 'DNS lookup failed';
-        hint = 'Check the server URL. The hostname could not be resolved.';
-      } else if (errorType === 'timeout') {
-        userMessage = 'Connection timed out';
-        hint = 'The server is not responding. It may be unreachable or behind a firewall.';
-      } else if (errorType === 'cors-error') {
-        userMessage = 'CORS error';
-        hint = 'The server is blocking browser requests. This is common with self-hosted servers. Try using Electron mode (not browser) or configuring server CORS headers.';
-      } else if (errorType === 'network-error') {
-        userMessage = 'Network error';
-        hint = `Failed to connect to ${getApiBase()}. Common causes:\n• Server not running\n• Wrong URL/port\n• Firewall blocking connection\n• CORS restrictions (if in browser)`;
-      }
-
-      setTestResult({ success: false, message: userMessage, errorType, url: getApiBase(), hint });
+      console.log('[SettingsPanel.handleTest] Unexpected error:', errorMsg);
+      setTestResult({
+        success: false,
+        message: errorMsg,
+        hint: 'An unexpected error occurred. Check the console logs for details.',
+      });
     }
   };
 
