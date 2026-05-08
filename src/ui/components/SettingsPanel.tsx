@@ -207,7 +207,14 @@ function ConnectionSection() {
   const [apiUrl, setApiUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [saved, setSaved] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [testResult, setTestResult] = useState<{
+    success: boolean;
+    message: string;
+    errorType?: string;
+    url?: string;
+    status?: number;
+    hint?: string;
+  } | null>(null);
   const [connectionMode, setMode] = useState<ConnectionMode>('server');
   const [remoteUrl, setRemoteUrl] = useState('');
 
@@ -280,7 +287,7 @@ function ConnectionSection() {
 
       if (response.ok) {
         setServerConnected(true);
-        setTestResult({ success: true, message: `Connected to ${baseURL}` });
+        setTestResult({ success: true, message: `Connected to ${baseURL}`, status: response.status });
         console.log('[SettingsPanel.handleTest] Success:', response.status);
       } else {
         setServerConnected(false);
@@ -288,7 +295,21 @@ function ConnectionSection() {
         let body = '';
         try { body = await response.text(); } catch { /* ignore */ }
         console.log('[SettingsPanel.handleTest] Failed:', response.status, body.slice(0, 200));
-        setTestResult({ success: false, message: `Server returned ${response.status}: ${body.slice(0, 100)}` });
+
+        // Get hint based on status
+        let hint = '';
+        if (response.status === 401) hint = 'Authentication failed. Check your API key.';
+        else if (response.status === 403) hint = 'Access denied. Check your permissions.';
+        else if (response.status === 404) hint = 'Server endpoint not found. Is this a Letta server?';
+        else if (response.status >= 500) hint = 'Server error. Check the server logs.';
+
+        setTestResult({
+          success: false,
+          message: `Server returned ${response.status}`,
+          status: response.status,
+          url: fullUrl,
+          hint,
+        });
       }
     } catch (err) {
       setServerConnected(false);
@@ -296,24 +317,37 @@ function ConnectionSection() {
 
       // Classify error for better UX
       const errorType =
-        errorMsg.includes('ECONNREFUSED') || errorMsg.includes('Failed to fetch') ? 'connection-refused' :
+        errorMsg.includes('ECONNREFUSED') ? 'connection-refused' :
+        errorMsg.includes('Failed to fetch') && errorMsg.includes('fetch') ? 'network-error' :
         errorMsg.includes('ENOTFOUND') || errorMsg.includes('getaddrinfo') ? 'dns-failed' :
         errorMsg.includes('ETIMEDOUT') ? 'timeout' :
+        errorMsg.includes('CORS') ? 'cors-error' :
         'unknown';
 
       console.log('[SettingsPanel.handleTest] Error:', errorType, errorMsg);
 
-      // User-friendly error message
+      // User-friendly error message with troubleshooting hints
       let userMessage = errorMsg;
+      let hint = '';
+
       if (errorType === 'connection-refused') {
-        userMessage = `Connection refused. Is the server running at ${getApiBase()}?`;
+        userMessage = 'Connection refused';
+        hint = `Is the Letta server running at ${getApiBase()}? Check that the server is started and the URL is correct.`;
       } else if (errorType === 'dns-failed') {
-        userMessage = `DNS lookup failed. Check the server URL.`;
+        userMessage = 'DNS lookup failed';
+        hint = 'Check the server URL. The hostname could not be resolved.';
       } else if (errorType === 'timeout') {
-        userMessage = `Connection timed out. Server may be unreachable.`;
+        userMessage = 'Connection timed out';
+        hint = 'The server is not responding. It may be unreachable or behind a firewall.';
+      } else if (errorType === 'cors-error') {
+        userMessage = 'CORS error';
+        hint = 'The server is blocking browser requests. This is common with self-hosted servers. Try using Electron mode (not browser) or configuring server CORS headers.';
+      } else if (errorType === 'network-error') {
+        userMessage = 'Network error';
+        hint = `Failed to connect to ${getApiBase()}. Common causes:\n• Server not running\n• Wrong URL/port\n• Firewall blocking connection\n• CORS restrictions (if in browser)`;
       }
 
-      setTestResult({ success: false, message: userMessage });
+      setTestResult({ success: false, message: userMessage, errorType, url: getApiBase(), hint });
     }
   };
 
@@ -497,7 +531,27 @@ function ConnectionSection() {
 
             {testResult && (
               <Alert variant={testResult.success ? 'success' : 'error'}>
-                {testResult.message}
+                <div className="space-y-2">
+                  <div className="font-medium">{testResult.message}</div>
+                  {!testResult.success && (
+                    <>
+                      {testResult.url && (
+                        <div className="text-xs opacity-80">URL: {testResult.url}</div>
+                      )}
+                      {testResult.status && (
+                        <div className="text-xs opacity-80">Status: {testResult.status}</div>
+                      )}
+                      {testResult.errorType && (
+                        <div className="text-xs opacity-80">Error Type: {testResult.errorType}</div>
+                      )}
+                      {testResult.hint && (
+                        <div className="text-sm mt-2 pt-2 border-t border-current border-opacity-20">
+                          <span className="font-semibold">Hint:</span> {testResult.hint}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
               </Alert>
             )}
 
