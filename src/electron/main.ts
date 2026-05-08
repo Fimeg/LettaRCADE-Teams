@@ -5,6 +5,24 @@ import { join } from "path";
 import { writeFileSync, appendFileSync, existsSync, mkdirSync } from "fs";
 import { format } from "util";
 
+/**
+ * Wait for dev server to be ready before loading UI.
+ * Prevents ERR_CONNECTION_REFUSED when Electron starts before Vite.
+ */
+async function waitForDevServer(port: number, timeoutMs = 30000): Promise<boolean> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        try {
+            const res = await fetch(`http://localhost:${port}`);
+            if (res.ok) return true;
+        } catch {
+            // Server not ready yet
+        }
+        await new Promise(r => setTimeout(r, 100));
+    }
+    return false;
+}
+
 // Setup persistent file logging
 const LOG_DIR = join(app.getPath('userData'), 'logs');
 const LOG_FILE = join(LOG_DIR, `app-${new Date().toISOString().split('T')[0]}.log`);
@@ -225,7 +243,7 @@ app.on('certificate-error', (event, webContents, url, error, certificate, callba
 });
 
 // Initialize everything when app is ready
-app.on("ready", () => {
+app.on("ready", async () => {
     // Initialize config and database
     appConfig = loadConfig();
     initDatabase();
@@ -280,8 +298,20 @@ app.on("ready", () => {
         });
     });
 
-    if (isDev()) mainWindow.loadURL(`http://localhost:${DEV_PORT}`)
-    else mainWindow.loadFile(getUIPath());
+    // Load UI: wait for dev server in dev mode, or load built files in production
+    if (isDev()) {
+        console.log("[main] Dev mode detected, waiting for Vite server...");
+        const serverReady = await waitForDevServer(DEV_PORT, 30000);
+        if (serverReady) {
+            console.log("[main] Vite server ready, loading...");
+            await mainWindow.loadURL(`http://localhost:${DEV_PORT}`);
+        } else {
+            console.error("[main] Vite server not ready after 30s, showing error...");
+            mainWindow.loadURL(`data:text/html,<h1>Error: Dev server not ready</h1><p>Could not connect to Vite dev server on port ${DEV_PORT}. Did you run <code>npm run dev:react</code>?</p>`);
+        }
+    } else {
+        await mainWindow.loadFile(getUIPath());
+    }
 
     globalShortcut.register('CommandOrControl+Q', () => {
         cleanup();
