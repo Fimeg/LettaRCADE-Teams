@@ -282,23 +282,23 @@ function ConnectionSection() {
 
       // Method 1: Try Electron IPC first (better diagnostics)
       const hasElectronIPC = typeof window !== 'undefined' && !!window.electron?.letta?.healthCheck;
-      console.log('[SettingsPanel.handleTest] Electron IPC available:', hasElectronIPC);
+      console.log('[SettingsPanel.handleTest] Electron IPC available:', hasElectronIPC, 'window.electron?', typeof window !== 'undefined' && !!window.electron);
 
       if (hasElectronIPC) {
         try {
-          console.log('[SettingsPanel.handleTest] Trying IPC health check...');
+          console.log('[SettingsPanel.handleTest] Trying IPC health check to:', baseURL);
           const ipcResult = await window.electron.letta.healthCheck(baseURL, key);
-          console.log('[SettingsPanel.handleTest] IPC result:', ipcResult);
+          console.log('[SettingsPanel.handleTest] IPC result:', JSON.stringify(ipcResult));
           result = { ...ipcResult, method: 'ipc' };
         } catch (ipcErr) {
-          console.error('[SettingsPanel.handleTest] IPC failed:', ipcErr);
+          console.error('[SettingsPanel.handleTest] IPC threw error:', ipcErr);
           // Fall through to browser fetch
         }
       }
 
       // Method 2: Browser fetch (fallback or if IPC not available)
       if (!result) {
-        console.log('[SettingsPanel.handleTest] Trying browser fetch...');
+        console.log('[SettingsPanel.handleTest] Trying browser fetch to:', fullUrl);
         try {
           const response = await fetch(fullUrl, {
             method: 'GET',
@@ -312,6 +312,8 @@ function ConnectionSection() {
           result = { healthy: false, error: msg, errorType: 'network-error', method: 'fetch' };
         }
       }
+
+      console.log('[SettingsPanel.handleTest] Final result:', result);
 
       if (result.healthy) {
         setServerConnected(true);
