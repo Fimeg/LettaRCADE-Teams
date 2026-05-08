@@ -327,37 +327,34 @@ function ConnectionSection() {
         setServerConnected(false);
         console.log('[SettingsPanel.handleTest] Failed:', result.errorType, result.error, result.status);
 
-        // Get hint based on error type or status
-        let hint = '';
+        // Build detailed error message with all info
         let message = result.error || 'Connection failed';
+        let hint = '';
 
-        if (result.status === 401) {
-          hint = 'Authentication failed. Check your API key.';
-          message = `Server returned ${result.status}: Authentication failed`;
-        } else if (result.status === 403) {
-          hint = 'Access denied. Check your permissions.';
-          message = `Server returned ${result.status}: Access denied`;
-        } else if (result.status === 404) {
-          hint = 'Server endpoint not found. Is this a Letta server?';
-          message = `Server returned ${result.status}: Not found`;
-        } else if (result.status && result.status >= 500) {
-          hint = 'Server error. Check the server logs.';
-          message = `Server returned ${result.status}: Server error`;
-        } else if (result.errorType === 'connection-refused') {
-          message = 'Connection refused';
-          hint = `Is the Letta server running at ${baseURL}? Check that the server is started and the URL/port are correct.`;
+        // Add status code if available
+        if (result.status) {
+          message = `[${result.status}] ${message}`;
+        }
+
+        // Add error type context
+        if (result.errorType === 'connection-refused') {
+          hint = `Connection refused. Is the Letta server running at ${baseURL}? Check server is started and URL/port are correct.`;
         } else if (result.errorType === 'dns-failed') {
-          message = 'DNS lookup failed';
-          hint = `Cannot resolve hostname. Check the server URL: ${baseURL}`;
+          hint = `DNS lookup failed. Cannot resolve hostname in URL: ${baseURL}`;
         } else if (result.errorType === 'timeout') {
-          message = 'Connection timed out';
-          hint = 'The server is not responding. It may be unreachable or behind a firewall.';
+          hint = `Connection timed out. Server at ${baseURL} not responding - may be unreachable or behind firewall.`;
         } else if (result.errorType === 'ssl-error') {
-          message = 'SSL/TLS error';
-          hint = 'Certificate error. If using self-signed certs, the app should allow them. Check the server certificate.';
+          hint = 'SSL/TLS certificate error. Check server certificate configuration.';
+        } else if (result.status === 401) {
+          hint = 'HTTP 401 Unauthorized - Authentication failed. Check your API key.';
+        } else if (result.status === 403) {
+          hint = 'HTTP 403 Forbidden - Access denied. Check your permissions.';
+        } else if (result.status === 404) {
+          hint = 'HTTP 404 Not Found - Endpoint missing. Is this a Letta server?';
+        } else if (result.status && result.status >= 500) {
+          hint = `HTTP ${result.status} Server Error - Check Letta server logs for details.`;
         } else if (result.errorType === 'network-error' || result.errorType === 'unknown') {
-          message = result.error || 'Network error';
-          hint = `Failed to connect to ${baseURL}. Common causes:\n• Server not running\n• Wrong URL or port\n• Firewall blocking connection\n• Server requires password (Basic Auth) or API key\n• CORS restrictions (if in browser)`;
+          hint = `Network error connecting to ${baseURL}.\nCommon causes:\n• Server not running\n• Wrong URL or port\n• Firewall blocking\n• CORS restrictions (browser only)\n• Missing API key`;
         }
 
         setTestResult({
@@ -565,18 +562,13 @@ function ConnectionSection() {
                   <div className="font-medium">{testResult.message}</div>
                   {!testResult.success && (
                     <>
-                      {testResult.url && (
-                        <div className="text-xs opacity-80">URL: {testResult.url}</div>
-                      )}
-                      {testResult.status && (
-                        <div className="text-xs opacity-80">Status: {testResult.status}</div>
-                      )}
+                      <div className="text-xs opacity-80">URL: {testResult.url || baseURL}</div>
                       {testResult.errorType && (
-                        <div className="text-xs opacity-80">Error Type: {testResult.errorType}</div>
+                        <div className="text-xs opacity-80">Error: {testResult.errorType}</div>
                       )}
                       {testResult.hint && (
-                        <div className="text-sm mt-2 pt-2 border-t border-current border-opacity-20">
-                          <span className="font-semibold">Hint:</span> {testResult.hint}
+                        <div className="text-sm mt-2 pt-2 border-t border-current border-opacity-20 whitespace-pre-line">
+                          {testResult.hint}
                         </div>
                       )}
                     </>
