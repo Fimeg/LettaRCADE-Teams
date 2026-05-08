@@ -30,9 +30,9 @@ let clientInstance: Letta | null = null;
 export type ConnectionMode = 'server' | 'local' | 'remote';
 
 export function getConnectionMode(): ConnectionMode {
-  if (typeof window === 'undefined') return 'server';
+  if (typeof window === 'undefined') return 'local';
   const mode = localStorage.getItem('letta_connection_mode') as ConnectionMode | null;
-  return mode || 'server';
+  return mode || 'local';
 }
 
 export function setConnectionMode(mode: ConnectionMode, remoteUrl?: string): void {

@@ -5,7 +5,7 @@ import { useMessageWindow } from "../hooks/useMessageWindow";
 import { useIPC } from "../hooks/useIPC";
 import { useStreamingMessages } from "../hooks/useStreamingMessages";
 import { useMessageHistory } from "../hooks/useMessageHistory";
-import { getLettaClient } from "../services/api";
+import { getLettaClient, getConnectionMode } from "../services/api";
 import type { Letta } from "@letta-ai/letta-client";
 import { slashCommandHandlers } from "../services/slashCommands";
 import type { ClientEvent, ServerEvent } from "../types";
@@ -430,8 +430,8 @@ export function AgentWorkspace({ agentId, onBack, sendEvent }: AgentWorkspacePro
   const prevMessagesLengthRef = useRef(0);
 
   // Connection mode (3-mode architecture: server / local / remote)
-  // Default to LOCAL mode - CLI will auto-spawn when agent loads
-  const [connectionMode, setConnectionMode] = useState<ConnectionMode>('local');
+  // Reads from localStorage to stay in sync with SettingsPanel
+  const [connectionMode, setConnectionMode] = useState<ConnectionMode>(() => getConnectionMode());
   const [remoteUrl, setRemoteUrl] = useState<string>('');
 
   // Focus mode: collapses the workspace down to just the chat stream — no

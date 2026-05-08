@@ -14,8 +14,8 @@ import {
   resetClient,
   systemApi,
   providersApi,
-  getApiBase,
   getApiKey,
+  getServerUrl,
   getConnectionMode,
   setConnectionMode,
   getRemoteUrl,
@@ -273,7 +273,7 @@ function ConnectionSection() {
   const handleTest = async () => {
     setTestResult(null);
     try {
-      const baseURL = getApiBase();
+      const baseURL = getServerUrl();
       const key = getApiKey();
 
       // In dev mode (Vite), use relative URL to go through proxy and avoid CORS
@@ -287,11 +287,11 @@ function ConnectionSection() {
       // Try both methods and see which works
       let result: { healthy: boolean; status?: number; error?: string; errorType?: string; method?: string };
 
-      const hasElectronIPC = typeof window !== 'undefined' && !!window.electron?.letta?.healthCheck;
+      const hasElectronIPC = typeof window !== 'undefined' && !!(window as any).electron?.letta?.healthCheck;
 
       if (hasElectronIPC) {
         console.log('[SettingsPanel.handleTest] Using IPC health check to:', baseURL);
-        const ipcResult = await window.electron.letta.healthCheck(baseURL, key);
+        const ipcResult = await (window as any).electron.letta.healthCheck(baseURL, key);
         console.log('[SettingsPanel.handleTest] IPC result:', JSON.stringify(ipcResult));
         result = { ...ipcResult, method: 'ipc' };
       } else {
@@ -492,14 +492,13 @@ function ConnectionSection() {
           <CardContent className="p-6 space-y-4">
             <FormField
               label="Letta Server URL"
-              helperText={connectionMode === 'local' ? 'Fixed at localhost:8283 in Local mode' : 'Your Letta server address'}
+              helperText="Your Letta server address (all modes use this to load agents)"
             >
               <Input
                 type="url"
-                value={connectionMode === 'local' ? 'http://localhost:8283' : apiUrl}
+                value={apiUrl}
                 onChange={(e) => setApiUrl(e.target.value)}
                 placeholder="http://localhost:8283"
-                disabled={connectionMode === 'local'}
                 className="font-mono"
               />
             </FormField>
@@ -558,7 +557,7 @@ function ConnectionSection() {
                   <div className="font-medium">{testResult.message}</div>
                   {!testResult.success && (
                     <>
-                      <div className="text-xs opacity-80">URL: {testResult.url || baseURL}</div>
+                      <div className="text-xs opacity-80">URL: {testResult.url || getServerUrl()}</div>
                       {testResult.errorType && (
                         <div className="text-xs opacity-80">Error: {testResult.errorType}</div>
                       )}
