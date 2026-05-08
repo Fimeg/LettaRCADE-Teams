@@ -275,36 +275,32 @@ function ConnectionSection() {
     try {
       const baseURL = getApiBase();
       const key = getApiKey();
-      const fullUrl = `${baseURL.replace(/\/$/, '')}/v1/agents/`;
+
+      // In dev mode (Vite), use relative URL to go through proxy and avoid CORS
+      const isViteDev = typeof window !== 'undefined' && window.location.host === 'localhost:5173';
+      const fullUrl = isViteDev
+        ? '/v1/agents/'  // Goes through Vite proxy
+        : `${baseURL.replace(/\/$/, '')}/v1/agents/`;  // Direct request
+
+      console.log('[SettingsPanel.handleTest] Testing URL:', fullUrl, isViteDev ? '(via Vite proxy)' : '(direct)');
 
       // Try both methods and see which works
       let result: { healthy: boolean; status?: number; error?: string; errorType?: string; method?: string };
 
-      // Method 1: Try Electron IPC first (better diagnostics)
       const hasElectronIPC = typeof window !== 'undefined' && !!window.electron?.letta?.healthCheck;
-      console.log('[SettingsPanel.handleTest] Electron IPC available:', hasElectronIPC, 'window.electron?', typeof window !== 'undefined' && !!window.electron);
 
       if (hasElectronIPC) {
-        try {
-          console.log('[SettingsPanel.handleTest] Trying IPC health check to:', baseURL);
-          const ipcResult = await window.electron.letta.healthCheck(baseURL, key);
-          console.log('[SettingsPanel.handleTest] IPC result:', JSON.stringify(ipcResult));
-          result = { ...ipcResult, method: 'ipc' };
-        } catch (ipcErr) {
-          console.error('[SettingsPanel.handleTest] IPC threw error:', ipcErr);
-          // Fall through to browser fetch
-        }
-      }
-
-      // Method 2: Browser fetch (fallback or if IPC not available)
-      if (!result) {
-        console.log('[SettingsPanel.handleTest] Trying browser fetch to:', fullUrl);
+        console.log('[SettingsPanel.handleTest] Using IPC health check to:', baseURL);
+        const ipcResult = await window.electron.letta.healthCheck(baseURL, key);
+        console.log('[SettingsPanel.handleTest] IPC result:', JSON.stringify(ipcResult));
+        result = { ...ipcResult, method: 'ipc' };
+      } else {
+        console.log('[SettingsPanel.handleTest] No IPC, fetch to:', fullUrl);
         try {
           const response = await fetch(fullUrl, {
             method: 'GET',
             headers: key ? { Authorization: `Bearer ${key}` } : {},
           });
-          console.log('[SettingsPanel.handleTest] Fetch result:', response.status, response.ok);
           result = { healthy: response.ok, status: response.status, method: 'fetch' };
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'Failed to fetch';

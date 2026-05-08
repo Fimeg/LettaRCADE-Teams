@@ -275,6 +275,7 @@ app.on("ready", async () => {
             preload: getPreloadPath(),
             contextIsolation: true,
             nodeIntegration: false,
+            webSecurity: false,
         },
         icon: getIconPath(),
         titleBarStyle: "hiddenInset",
